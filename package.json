@@ -4,10 +4,15 @@
   "private": true,
   "description": "在无限画布上使用 Grok 生成、连接和迭代图片与视频。",
   "license": "MIT",
+  "author": {
+    "name": "Grok Canvas contributors",
+    "url": "https://github.com/AIMFllyYS/grok-canvas"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/wangxiaosu/grok-canvas.git"
   },
+  "main": "desktop/main.cjs",
   "packageManager": "pnpm@10.33.2",
   "engines": {
     "node": ">=22.18.0"
@@ -18,13 +23,63 @@
     "dev": "next dev -H 127.0.0.1 -p 3210",
     "build": "next build",
     "start": "next start -H 127.0.0.1 -p 3210",
+    "desktop:dev": "concurrently -k -s first -n next,electron \"pnpm dev\" \"wait-on http://127.0.0.1:3210 && electron . --dev\"",
+    "desktop:prepare": "node scripts/prepare-desktop.mjs",
+    "desktop:deps": "pnpm --dir .desktop/app install --prod --frozen-lockfile --config.node-linker=hoisted --ignore-scripts",
+    "desktop:finish": "node scripts/finish-desktop.mjs",
+    "desktop:bundle": "pnpm desktop:prepare && pnpm desktop:deps && pnpm desktop:finish",
+    "desktop:build": "pnpm build && pnpm desktop:bundle && electron-builder --win nsis",
+    "desktop:pack": "pnpm desktop:bundle && electron-builder --win nsis",
     "typecheck": "tsc --noEmit",
     "test:ui": "node --experimental-strip-types --test tests/floating-placement.test.mjs tests/page-zoom-guard.test.mjs tests/save-status.test.mjs tests/generation-auth-feedback.test.mjs",
     "test:generation": "node --experimental-strip-types --test tests/generation-record.test.mjs tests/generation-details.test.mjs tests/generation-registry.test.mjs tests/multi-image.test.mjs tests/generation-batch.test.mjs",
     "test:auth": "node --test tests/oauth.test.mjs",
     "test:video": "node --experimental-strip-types --test tests/video-references.test.mjs tests/video-request.test.mjs tests/video-tasks.test.mjs tests/video-route.test.mjs tests/video-runtime.test.mjs",
     "test:security": "node --experimental-strip-types --test tests/local-access.test.mjs",
-    "test:workspace": "node --test tests/workspace-preferences.test.mjs tests/account-display.test.mjs tests/canvas-interaction.test.mjs tests/usage.test.mjs tests/canvas-library.test.mjs tests/canvas-references.test.mjs tests/canvas-store.test.mjs tests/canvas-route.test.mjs tests/canvas-persistence.test.mjs tests/asset-upload.test.mjs tests/prompt-editor.test.mjs tests/asset-drag.test.mjs"
+    "test:workspace": "node --test tests/workspace-preferences.test.mjs tests/account-display.test.mjs tests/canvas-interaction.test.mjs tests/usage.test.mjs tests/canvas-library.test.mjs tests/canvas-references.test.mjs tests/canvas-store.test.mjs tests/canvas-route.test.mjs tests/canvas-persistence.test.mjs tests/asset-upload.test.mjs tests/prompt-editor.test.mjs tests/asset-drag.test.mjs tests/desktop-runtime.test.mjs tests/desktop-bridge.test.mjs"
+  },
+  "build": {
+    "appId": "com.aimfllyys.grokcanvas",
+    "productName": "Grok Canvas",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "desktop/**/*",
+      "package.json",
+      "LICENSE",
+      "!node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".desktop/app",
+        "to": "app"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "Grok-Canvas-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Grok Canvas",
+      "uninstallDisplayName": "Grok Canvas",
+      "deleteAppDataOnUninstall": false
+    }
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
@@ -48,6 +103,10 @@
     "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
-    "typescript": "^5.9.3"
+    "concurrently": "^10.0.6",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
+    "typescript": "^5.9.3",
+    "wait-on": "^9.5.1"
   }
 }

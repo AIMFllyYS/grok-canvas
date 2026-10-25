@@ -63,6 +63,19 @@ pnpm start
 
 `dev` 和 `start` 都使用本机 3210 端口，只运行其中一个。不要同时启动两个实例，也不要在已有开发服务运行时原地构建；检查生产构建可使用独立工作目录。
 
+## 桌面版
+
+Windows 安装包发布在 [Releases](https://github.com/AIMFllyYS/grok-canvas/releases)。安装后不需要另外安装 Node.js，也不需要手动启动终端服务；数据和浏览器版共用 `~/.grok-canvas` 目录。
+
+从源码打包：
+
+```sh
+pnpm install --frozen-lockfile
+pnpm desktop:build
+```
+
+安装包会输出到 `release/`。桌面版和开发服务都使用 3210 端口，打包前需要先停止正在运行的开发服务。目前安装包没有代码签名，Windows SmartScreen 可能提示未知发布者。
+
 ## 使用边界与常见问题
 
 | 情况 | 说明 |
@@ -119,6 +132,10 @@ pnpm build
 `pnpm check` 按顺序执行以上检查。自动化测试使用模拟请求，不需要登录或消耗 Grok 额度。欢迎通过 Issue 或 Pull Request 参与改进。
 
 第一次体验时，欢迎在 [Issues](https://github.com/wangxiaosu/grok-canvas/issues) 反馈：安装是否顺利、图片与视频是否可用、创作过程中最卡在哪一步。请提供系统、Node.js 版本、操作步骤及脱敏后的报错；不要粘贴登录凭据。涉及安全问题时，请先联系维护者获取私密反馈渠道，不要在公开 Issue 发布漏洞细节。
+
+## 项目来源
+
+本项目基于 KyroX（GitHub：[@wangxiaosu](https://github.com/wangxiaosu)）创建的开源项目 [grok-canvas](https://github.com/wangxiaosu/grok-canvas)。原仓库及其提交历史仍是本项目的来源；当前 fork 增加桌面端打包和后续维护。
 
 ## License
 

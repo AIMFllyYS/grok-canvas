@@ -3,6 +3,9 @@ node_modules/
 # 升级/排查时另存的旧构建产物（.next.stale-* 等）
 .next.*/
 *.tsbuildinfo
+# Electron staging and installer output
+/.desktop/
+/release/
 next-env.d.ts
 /data/
 .env
