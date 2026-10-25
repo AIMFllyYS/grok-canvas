@@ -13,7 +13,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security",
+    "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "next dev -H 127.0.0.1 -p 3210",
     "build": "next build",
@@ -23,7 +23,8 @@
     "test:generation": "node --experimental-strip-types --test tests/generation-record.test.mjs tests/generation-details.test.mjs tests/generation-registry.test.mjs tests/multi-image.test.mjs tests/generation-batch.test.mjs",
     "test:auth": "node --test tests/oauth.test.mjs",
     "test:video": "node --experimental-strip-types --test tests/video-references.test.mjs tests/video-request.test.mjs tests/video-tasks.test.mjs tests/video-route.test.mjs tests/video-runtime.test.mjs",
-    "test:security": "node --experimental-strip-types --test tests/local-access.test.mjs"
+    "test:security": "node --experimental-strip-types --test tests/local-access.test.mjs",
+    "test:workspace": "node --test tests/workspace-preferences.test.mjs tests/account-display.test.mjs tests/canvas-interaction.test.mjs tests/usage.test.mjs tests/canvas-library.test.mjs tests/canvas-references.test.mjs tests/canvas-store.test.mjs tests/canvas-route.test.mjs tests/canvas-persistence.test.mjs tests/asset-upload.test.mjs tests/prompt-editor.test.mjs tests/asset-drag.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

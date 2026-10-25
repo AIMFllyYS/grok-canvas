@@ -141,8 +141,8 @@ function EmptyRoleSlot({ role, onUpload, drop }: { role: "first" | "last"; onUpl
       <ControlButton
         className={`flex h-12 w-12 items-center justify-center rounded-md border border-dashed text-muted-foreground hover:text-foreground ${drop?.active ? "ring-2 ring-primary" : ""}`}
         onClick={onUpload}
-        title={`上传${label}，或把其他素材拖到这里`}
-        aria-label={`上传${label}`}
+        title={`选择或上传${label}，也可把其他素材拖到这里`}
+        aria-label={`选择${label}`}
       >
         <Plus className="h-4 w-4" />
       </ControlButton>
@@ -240,7 +240,8 @@ export function VideoInputSlots({
           <ControlButton
             className="flex h-12 w-12 items-center justify-center rounded-md border border-dashed text-muted-foreground hover:text-foreground"
             onClick={() => onUpload("reference")}
-            title={`上传参考图（${references.length}/${VIDEO_REFERENCE_MAX}）`}
+            title={`选择或上传参考图（${references.length}/${VIDEO_REFERENCE_MAX}）`}
+            aria-label="选择参考图"
           >
             <Plus className="h-4 w-4" />
           </ControlButton>

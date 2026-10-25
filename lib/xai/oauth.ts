@@ -142,6 +142,7 @@ function decodeIdToken(idToken: string | undefined): AuthFile["profile"] {
     return {
       ...(typeof claims.email === "string" ? { email: claims.email } : {}),
       ...(typeof claims.sub === "string" ? { sub: claims.sub } : {}),
+      ...(typeof claims.picture === "string" && claims.picture.length <= 4096 ? { picture: claims.picture } : {}),
     };
   } catch {
     return null;
@@ -257,6 +258,7 @@ export async function completeLogin(input: {
 
   auth.tokens = {};
   auth.profile = null;
+  auth.session_id = crypto.randomUUID();
   applyTokens(auth, result.payload);
   auth.pending_oauth = null;
   await saveAuth(auth, authPath);
@@ -308,6 +310,12 @@ async function doRefreshTokens(options: {
     client_id: XAI_CLIENT_ID,
     refresh_token: refreshToken,
   });
+
+  const latest = await loadAuth(authPath);
+  if (latest.tokens.refresh_token?.trim() !== refreshToken || latest.session_id !== auth.session_id) {
+    throw new OAuthError("relogin_required", "账户已退出或切换，已丢弃在途刷新结果");
+  }
+  Object.assign(auth, latest);
 
   if (!result.ok || !result.payload.access_token) {
     const message = describeTokenError(result.status, result.payload);

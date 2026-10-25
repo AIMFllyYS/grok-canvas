@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isLibraryAsset } from "@/lib/canvas-library";
 import { deleteCanvas, isSafeCanvasId, loadCanvas, saveCanvas, saveLastCanvasId, type CanvasDoc } from "@/lib/canvas-store";
 
 export const runtime = "nodejs";
@@ -6,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
 
-export async function GET(_request: Request, context: Params) {
+export async function GET(request: Request, context: Params) {
   const { id } = await context.params;
   if (!isSafeCanvasId(id)) {
     return NextResponse.json({ error: { kind: "bad_request", message: "bad canvas id" } }, { status: 400 });
@@ -15,8 +16,8 @@ export async function GET(_request: Request, context: Params) {
   if (!doc) {
     return NextResponse.json({ error: { kind: "not_found", message: "canvas not found" } }, { status: 404 });
   }
-  await saveLastCanvasId(id);
-  return NextResponse.json(doc);
+  if (new URL(request.url).searchParams.get("background") !== "1") await saveLastCanvasId(id);
+  return NextResponse.json(doc, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function PUT(request: Request, context: Params) {
@@ -30,8 +31,11 @@ export async function PUT(request: Request, context: Params) {
   } catch {
     return NextResponse.json({ error: { kind: "bad_request", message: "invalid JSON" } }, { status: 400 });
   }
-  if (typeof body.revision !== "number") {
+  if (!body || typeof body !== "object" || typeof body.revision !== "number" || !Number.isInteger(body.revision)) {
     return NextResponse.json({ error: { kind: "bad_request", message: "revision is required" } }, { status: 400 });
+  }
+  if (body.libraryAssets !== undefined && (!Array.isArray(body.libraryAssets) || !body.libraryAssets.every(isLibraryAsset))) {
+    return NextResponse.json({ error: { kind: "bad_request", message: "素材目录格式无效" } }, { status: 400 });
   }
   const saved = await saveCanvas(
     {
@@ -42,6 +46,7 @@ export async function PUT(request: Request, context: Params) {
       viewport: body.viewport ?? { x: 0, y: 0, zoom: 1 },
       nodes: Array.isArray(body.nodes) ? body.nodes : [],
       edges: Array.isArray(body.edges) ? body.edges : [],
+      ...(body.libraryAssets !== undefined ? { libraryAssets: body.libraryAssets } : {}),
     },
     body.revision,
   );

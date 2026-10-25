@@ -13,7 +13,6 @@ import {
   addEdge,
   Background,
   BackgroundVariant,
-  MiniMap,
   ReactFlow,
   useEdgesState,
   useNodesState,
@@ -26,7 +25,18 @@ import {
 import "@xyflow/react/dist/style.css";
 import { Plus, X } from "lucide-react";
 import { toast } from "sonner";
-import { compilePrompt, referencePattern } from "@/lib/prompt-references";
+import { compilePrompt, referencePattern, type PromptReference } from "@/lib/prompt-references";
+import { useTheme } from "next-themes";
+import { useWorkspacePreferences } from "../workspace-preferences";
+import { interactionConfig, interactionShortcut, type InteractionMode } from "@/lib/canvas-interaction";
+import { assetsFromOutcome, collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets, type CanvasLibraryAsset, type CanvasLibrarySource } from "@/lib/canvas-library";
+import { canvasSaveBody } from "@/lib/canvas-document";
+import { persistImageOutcome, persistVideoOutcome } from "@/lib/canvas-persistence";
+import { addFixedReferences, resolveCanvasReferences } from "@/lib/canvas-references";
+import { uploadAssets, type UploadProgress, type UploadedAsset } from "@/lib/asset-upload";
+import { CanvasAssetsContext, type ReferencePickerOptions } from "./canvas-assets-context";
+import { AssetLibrary } from "./asset-library";
+import { ReferencePicker } from "./reference-picker";
 import {
   compileVideoPrompt,
   defaultNewVideoRole,
@@ -61,7 +71,7 @@ import {
   takeOrphan,
   unregisterCanvas,
 } from "./generation-registry";
-import { CanvasControls } from "./canvas-controls";
+import { CanvasToolbar } from "./canvas-toolbar";
 import { CanvasEmptyState } from "./canvas-empty-state";
 import { CandidatePanel } from "./candidate-panel";
 import { PromptPanel } from "./prompt-panel";
@@ -218,47 +228,9 @@ async function persistResultToOriginCanvas(
   sourceNodeId: string,
   outcome: GenerationOutcome,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const response = await fetch(`/api/canvases/${canvasId}`, { cache: "no-store" });
-      if (!response.ok) {
-        break;
-      }
-      const remote = (await response.json()) as CanvasDoc;
-      const nodes = remote.nodes as Node[];
-      const source = nodes.find((item) => item.id === sourceNodeId);
-      if (!source) {
-        stashOrphan(canvasId, sourceNodeId, outcome);
-        return;
-      }
-      const patch = applyGenerationOutcome(source.data, outcome, () => crypto.randomUUID());
-      if (!patch) {
-        return; // 迟到的旧响应或同批次重复回写
-      }
-      source.data = { ...source.data, ...patch };
-      const put = await fetch(`/api/canvases/${canvasId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          revision: remote.revision,
-          name: remote.name,
-          createdAt: remote.createdAt,
-          viewport: remote.viewport,
-          nodes,
-          edges: remote.edges,
-        }),
-      });
-      if (put.ok) {
-        return;
-      }
-      if (put.status !== 409) {
-        break;
-      }
-    } catch {
-      break;
-    }
-  }
-  toast.error("生成完成，但写回原画布失败，请刷新对应画布检查");
+  try {
+    await persistImageOutcome(canvasId, sourceNodeId, outcome, { orphan: () => stashOrphan(canvasId, sourceNodeId, outcome) });
+  } catch { toast.error("生成完成，但写回原画布失败，请刷新对应画布检查"); }
 }
 
 async function persistVideoToOriginCanvas(
@@ -266,43 +238,9 @@ async function persistVideoToOriginCanvas(
   sourceNodeId: string,
   view: VideoTaskView,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const response = await fetch(`/api/canvases/${canvasId}`, { cache: "no-store" });
-      if (!response.ok) {
-        break;
-      }
-      const remote = (await response.json()) as CanvasDoc;
-      const nodes = remote.nodes as Node[];
-      const source = nodes.find((item) => item.id === sourceNodeId);
-      if (!source) {
-        stashVideoOrphan(canvasId, sourceNodeId, view);
-        return;
-      }
-      source.data = { ...source.data, ...videoNodePatchFromView(view) };
-      const put = await fetch(`/api/canvases/${canvasId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          revision: remote.revision,
-          name: remote.name,
-          createdAt: remote.createdAt,
-          viewport: remote.viewport,
-          nodes,
-          edges: remote.edges,
-        }),
-      });
-      if (put.ok) {
-        return;
-      }
-      if (put.status !== 409) {
-        break;
-      }
-    } catch {
-      break;
-    }
-  }
-  toast.error("生成完成，但写回原画布失败，请刷新对应画布检查");
+  try {
+    await persistVideoOutcome(canvasId, sourceNodeId, view, { orphan: () => stashVideoOrphan(canvasId, sourceNodeId, view) });
+  } catch { toast.error("生成完成，但写回原画布失败，请刷新对应画布检查"); }
 }
 
 // 来源右侧不重叠空位：右移一格，被占用则向下避让
@@ -324,6 +262,18 @@ export function FlowCanvas({
   onSaveStatus?: (status: CanvasSaveStatus) => void;
 }) {
   const desktopAvailable = useDesktopAvailable();
+  const { resolvedTheme } = useTheme();
+  const { layout } = useWorkspacePreferences();
+  const [mode, setMode] = useState<InteractionMode>("select");
+  const [dragging, setDragging] = useState(false);
+  const [libraryAssets, setLibraryAssets] = useState(() => normalizeLibraryAssets(doc.libraryAssets));
+  const libraryRef = useRef(libraryAssets);
+  const [uploads, setUploads] = useState<UploadProgress[]>([]);
+  const pendingUploads = useRef(new Set<Promise<unknown>>());
+  const [picker, setPicker] = useState<({ nodeId: string } & ReferencePickerOptions) | null>(null);
+  const dirtyVersion = useRef(0);
+  const savedVersion = useRef(0);
+  const mounted = useRef(true);
   const { loggedIn, refresh: refreshAuth } = useAuth();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(doc.nodes as Node[]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(doc.edges as Edge[]);
@@ -377,6 +327,8 @@ export function FlowCanvas({
   const { screenToFlowPosition, updateNodeData, zoomIn, zoomOut, zoomTo } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const libraryUploadInputRef = useRef<HTMLInputElement>(null);
+  const libraryUploadSourceRef = useRef<CanvasLibrarySource>("imported");
   const attachInputRef = useRef<HTMLInputElement>(null);
   const uploadAtRef = useRef({ x: 0, y: 0 });
   const attachTargetRef = useRef<string | null>(null);
@@ -418,22 +370,25 @@ export function FlowCanvas({
       return;
     }
     savingRef.current = true;
+    const version = dirtyVersion.current;
     try {
       const response = await fetch(`/api/canvases/${doc.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(canvasSaveBody(doc, {
           revision: revisionRef.current,
-          name: doc.name,
-          createdAt: doc.createdAt,
           viewport: viewportRef.current,
           nodes: latestRef.current.nodes,
           edges: latestRef.current.edges,
-        }),
+          libraryAssets: libraryRef.current,
+        })),
       });
       const payload = (await response.json()) as CanvasDoc & { error?: { message: string } };
       if (response.ok) {
         revisionRef.current = payload.revision;
+        savedVersion.current = version;
+        const merged = mergeLibraryAssets(libraryRef.current, normalizeLibraryAssets(payload.libraryAssets));
+        if (merged !== libraryRef.current && mounted.current) { libraryRef.current = merged; setLibraryAssets(merged); }
         reportSave({ ok: true });
       } else if (response.status === 409) {
         reportSave({ ok: false, message: canvasSaveErrorMessage({ kind: "conflict" }) });
@@ -447,10 +402,14 @@ export function FlowCanvas({
       reportSave({ ok: false, message: canvasSaveErrorMessage({ kind: "network" }) });
     } finally {
       savingRef.current = false;
+      if (mounted.current && savedVersion.current === version && dirtyVersion.current !== version) {
+        saveTimerRef.current = setTimeout(() => void save(), 500);
+      }
     }
   }, [doc]);
 
   const scheduleSave = useCallback(() => {
+    dirtyVersion.current++;
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
     }
@@ -459,6 +418,7 @@ export function FlowCanvas({
 
   // 切换画布前调用：停掉防抖、等在途保存、把最新状态落盘，返回是否成功
   const flushSave = useCallback(async (): Promise<boolean> => {
+    while (pendingUploads.current.size) await Promise.allSettled([...pendingUploads.current]);
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -476,7 +436,17 @@ export function FlowCanvas({
 
   // 卸载（切换画布/删除画布）：停掉未触发的防抖保存
   useEffect(() => {
+    mounted.current = true;
+    const warn = (event: BeforeUnloadEvent) => {
+      if (pendingUploads.current.size || dirtyVersion.current !== savedVersion.current) { event.preventDefault(); event.returnValue = ""; }
+    };
+    const resetGesture = () => setDragging(false);
+    window.addEventListener("blur", resetGesture);
+    window.addEventListener("beforeunload", warn);
     return () => {
+      window.removeEventListener("blur", resetGesture);
+      mounted.current = false;
+      window.removeEventListener("beforeunload", warn);
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
@@ -484,9 +454,15 @@ export function FlowCanvas({
     };
   }, []);
 
+  const registerAssets = useCallback((items: CanvasLibraryAsset[]) => {
+    const next = mergeLibraryAssets(libraryRef.current, items);
+    if (next !== libraryRef.current) { libraryRef.current = next; setLibraryAssets(next); scheduleSave(); }
+  }, [scheduleSave]);
+
   // 生成结局落地：整批一次写入；节点已删则暂存 orphan，等撤销删除后补写
   const applyOutcome = useCallback(
     (nodeId: string, outcome: GenerationOutcome) => {
+      registerAssets(assetsFromOutcome(outcome, new Date().toISOString()));
       const node = latestRef.current.nodes.find((item) => item.id === nodeId);
       if (!node) {
         stashOrphan(doc.id, nodeId, outcome);
@@ -497,7 +473,7 @@ export function FlowCanvas({
         updateNodeData(nodeId, patch);
       }
     },
-    [doc.id, updateNodeData],
+    [doc.id, updateNodeData, registerAssets],
   );
 
   // 注册为前台画布接收生成结果；挂载时恢复仍在进行中的 loading 状态、补写 orphan
@@ -606,11 +582,13 @@ export function FlowCanvas({
       skipInitialSaveRef.current = false;
       return;
     }
+    registerAssets(collectCanvasAssets(nodes, doc.createdAt, libraryRef.current));
     scheduleSave();
-  }, [nodes, edges, scheduleSave]);
+  }, [nodes, edges, scheduleSave, registerAssets, doc.createdAt]);
 
   const onMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
+      setDragging(false);
       viewportRef.current = viewport;
       scheduleSave();
     },
@@ -678,6 +656,7 @@ export function FlowCanvas({
   // 拖线松开：落在节点框上 → 自动连接；落在空白 → 弹"引用该节点生成"菜单
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent, connectionState: { isValid: boolean | null; fromNode?: Node | null; fromHandle?: { type: string } | null }) => {
+      setDragging(false);
       if (connectionState.isValid) {
         return;
       }
@@ -740,7 +719,9 @@ export function FlowCanvas({
         data: defaultImageNodeData("图片"),
       };
       // 新节点独占选中并弹出输入框：创建即把注意力放到该节点上
-      setNodes((current) => [...current.map((item) => (item.selected ? { ...item, selected: false } : item)), node]);
+      const next = [...latestRef.current.nodes.map(item => item.selected ? { ...item, selected: false } : item), node];
+      latestRef.current = { ...latestRef.current, nodes: next };
+      setNodes(next);
       setPanelNodeId(id);
       return node;
     },
@@ -757,7 +738,9 @@ export function FlowCanvas({
         selected: true,
         data: defaultVideoNodeData("视频"),
       };
-      setNodes((current) => [...current.map((item) => (item.selected ? { ...item, selected: false } : item)), node]);
+      const next = [...latestRef.current.nodes.map(item => item.selected ? { ...item, selected: false } : item), node];
+      latestRef.current = { ...latestRef.current, nodes: next };
+      setNodes(next);
       setPanelNodeId(id);
       return node;
     },
@@ -772,104 +755,94 @@ export function FlowCanvas({
         position: at,
         data: { name, assetName },
       };
-      setNodes((current) => [...current, node]);
+      const next = [...latestRef.current.nodes, node];
+      latestRef.current = { ...latestRef.current, nodes: next };
+      setNodes(next);
       return node;
     },
     [setNodes],
   );
 
-  const uploadFiles = useCallback(async (files: File[]) => {
-    const form = new FormData();
-    for (const file of files) {
-      form.append("files", file);
-    }
-    const response = await fetch("/api/assets/upload", { method: "POST", body: form });
-    const payload = (await response.json()) as {
-      assets: Array<{ name: string; originalName: string }>;
-      rejected: Array<{ name: string; reason: string }>;
-    };
-    for (const item of payload.rejected) {
-      toast.error(`${item.name}：${item.reason}`);
-    }
-    return payload.assets;
+  const referencePatch = useCallback((nodeId: string, references: PromptReference[], role: VideoInputRole = "reference") => {
+    const current = latestRef.current;
+    const node = current.nodes.find(item => item.id === nodeId);
+    if (!node) throw new Error("目标节点已移除");
+    if (isPending(doc.id, nodeId) || hasPendingFrom(doc.id, nodeId)) throw new Error("生成期间不能修改参考图");
+    if (references.some(item => !libraryRef.current.some(asset => asset.assetName === item.assetName))) throw new Error("该图片不在当前画布素材库中");
+    return addFixedReferences(node, current.nodes, current.edges, references, role);
+  }, [doc.id]);
+  const referenceError = useCallback((nodeId: string, references: PromptReference[], role: VideoInputRole = "reference"): string | null => {
+    try { referencePatch(nodeId, references, role); return null; } catch (error) { return error instanceof Error ? error.message : "无法添加参考图"; }
+  }, [referencePatch]);
+  const addReferences = useCallback((nodeId: string, references: PromptReference[], role: VideoInputRole = "reference", prompt?: string) => {
+    try {
+      const patch = referencePatch(nodeId, references, role);
+      const next = latestRef.current.nodes.map(node => node.id !== nodeId ? node : { ...node, data: { ...node.data, ...patch, ...(prompt !== undefined ? node.data.assetName ? { draftPrompt: prompt } : { prompt } : {}) } });
+      latestRef.current = { ...latestRef.current, nodes: next };
+      setNodes(next);
+      scheduleSave();
+      return true;
+    } catch (error) { toast.error(error instanceof Error ? error.message : "无法添加参考图"); return false; }
+  }, [referencePatch, setNodes, scheduleSave]);
+  const requestPicker = useCallback((nodeId: string, options?: ReferencePickerOptions) => {
+    if (!latestRef.current.nodes.some(node => node.id === nodeId)) return;
+    setPicker({ nodeId, ...options });
   }, []);
+  const assetActions = useMemo(() => ({ assets: libraryAssets, addReferences, referenceError, requestPicker }), [libraryAssets, addReferences, referenceError, requestPicker]);
+  useEffect(() => {
+    if (picker && (!desktopAvailable || !nodes.some(node => node.id === picker.nodeId))) { picker.onClose?.(); setPicker(null); }
+  }, [picker, nodes, desktopAvailable]);
 
-  const onCanvasUpload = useCallback(
-    async (files: FileList | null) => {
-      if (!files || files.length === 0) {
-        return;
-      }
-      const assets = await uploadFiles(Array.from(files));
+  const runUpload = useCallback((operation: () => Promise<void>): Promise<void> => {
+    if (pendingUploads.current.size) { toast.info("请等待当前批次导入完成"); return Promise.resolve(); }
+    const pending = operation().catch(() => { toast.error("导入失败，请重试"); }).finally(() => pendingUploads.current.delete(pending));
+    pendingUploads.current.add(pending);
+    return pending;
+  }, []);
+  const uploadFiles = useCallback(async (files: File[], source: CanvasLibrarySource): Promise<UploadedAsset[]> => {
+    const addedAt = new Date().toISOString();
+    const results = await uploadAssets(files, { onUpdate: items => {
+      if (!mounted.current) return;
+      setUploads(items);
+      registerAssets(items.flatMap(item => item.asset ? [{ assetName: item.asset.name, name: item.asset.originalName.slice(0, 512), sources: [source], addedAt }] : []));
+    } });
+    for (const item of results) if (item.error) toast.error(`${item.name}：${item.error}`);
+    return results.flatMap(item => item.asset ? [item.asset] : []);
+  }, [registerAssets]);
+  const onLibraryUpload = useCallback((files: FileList | null) => {
+    const batch = Array.from(files ?? []);
+    if (!batch.length) return;
+    const source = libraryUploadSourceRef.current;
+    libraryUploadSourceRef.current = "imported";
+    void runUpload(async () => { await uploadFiles(batch, source); });
+  }, [runUpload, uploadFiles]);
+
+  const onCanvasUpload = useCallback((files: FileList | null) => {
+    const batch = Array.from(files ?? []);
+    if (!batch.length) return;
+    const position = { ...uploadAtRef.current };
+    return runUpload(async () => {
+      const assets = await uploadFiles(batch, "imported");
       // 一批上传记一条撤销，避免多张图要按多次 ⌘Z
-      const created = assets.map((asset, index) =>
-        addAssetNode(
-          { x: uploadAtRef.current.x + index * 40, y: uploadAtRef.current.y + index * 40 },
-          asset.name,
-          asset.originalName,
-        ),
-      );
-      if (created.length > 0) {
-        pushAdd(created, []);
-      }
-    },
-    [addAssetNode, pushAdd, uploadFiles],
-  );
+      const created = assets.map((asset, index) => addAssetNode({ x: position.x + index * 40, y: position.y + index * 40 }, asset.name, asset.originalName));
+      if (created.length) pushAdd(created, []);
+    });
+  }, [addAssetNode, pushAdd, runUpload, uploadFiles]);
 
-  const onAttachmentUpload = useCallback(
-    async (files: FileList | null) => {
-      const nodeId = attachTargetRef.current;
-      attachTargetRef.current = null;
-      if (!nodeId || !files || files.length === 0) {
-        return;
-      }
-      const file = files[0];
-      if (!file) {
-        return;
-      }
-      const node = latestRef.current.nodes.find((item) => item.id === nodeId);
-      const requestedRole = attachRoleRef.current;
-      attachRoleRef.current = undefined;
-      if (node?.type === "video") {
-        const occupancy = videoOccupancy(nodeId, latestRef.current.nodes, latestRef.current.edges);
-        const role = requestedRole ?? defaultNewVideoRole(occupancy);
-        if (!role) {
-          toast.error("视频素材槽已满，请先移除");
-          return;
-        }
-        if ((role === "first" || role === "last") && occupancy.some((item) => item.role === role)) {
-          toast.error(role === "first" ? "已有首帧" : "已有尾帧");
-          return;
-        }
-        if (role === "reference" && occupancy.filter((item) => item.role === "reference").length >= VIDEO_REFERENCE_MAX) {
-          toast.error(`参考图最多 ${VIDEO_REFERENCE_MAX} 张`);
-          return;
-        }
-        const assets = await uploadFiles([file]);
-        const uploaded = assets[0];
-        if (!uploaded) {
-          return;
-        }
-        const current = ((node.data as VideoNodeData).uploadInputs) ?? [];
-        updateNodeData(nodeId, {
-          uploadInputs: [...current, { assetName: uploaded.name, role }],
-          attachmentNames: { ...((node.data as VideoNodeData).attachmentNames ?? {}), [uploaded.name]: uploaded.originalName },
-        });
-        return;
-      }
-      if (attachmentCountOf(nodeId) >= ATTACHMENT_MAX) {
-        toast.error(`附件已满 ${ATTACHMENT_MAX} 个，请先移除`);
-        return;
-      }
-      const assets = await uploadFiles([file]);
+  const onAttachmentUpload = useCallback((files: FileList | null) => {
+    const nodeId = attachTargetRef.current, requestedRole = attachRoleRef.current;
+    attachTargetRef.current = null; attachRoleRef.current = undefined;
+    const file = files?.[0];
+    if (!nodeId || !file) return;
+    return runUpload(async () => {
+      const assets = await uploadFiles([file], "manual");
       const uploaded = assets[0];
-      if (!uploaded) {
-        return;
-      }
-      const current = (node?.data.uploadAttachments as string[] | undefined) ?? [];
-      updateNodeData(nodeId, { uploadAttachments: [...current, uploaded.name], attachmentNames: { ...(node?.data.attachmentNames as Record<string, string> ?? {}), [uploaded.name]: uploaded.originalName } });
-    },
-    [attachmentCountOf, updateNodeData, uploadFiles],
-  );
+      if (!uploaded) return;
+      const node = latestRef.current.nodes.find(item => item.id === nodeId);
+      const role = requestedRole ?? (node?.type === "video" ? defaultNewVideoRole(videoOccupancy(nodeId, latestRef.current.nodes, latestRef.current.edges)) : "reference");
+      if (!role || !addReferences(nodeId, [{ assetName: uploaded.name, name: uploaded.originalName }], role)) toast.info("图片已保留在本画布素材库，可稍后添加");
+    });
+  }, [addReferences, runUpload, uploadFiles]);
 
   const requestAttachmentUpload = useCallback((nodeId: string, options?: { role?: VideoInputRole }) => {
     attachTargetRef.current = nodeId;
@@ -910,17 +883,13 @@ export function FlowCanvas({
         toast.error(LOGIN_REQUIRED_MESSAGE);
         return;
       }
-      const edgeRefNames = latestRef.current.edges
-        .filter((edge) => edge.target === nodeId)
-        .map((edge) => latestRef.current.nodes.find((item) => item.id === edge.source)?.data.assetName);
-      const missingRefs = edgeRefNames.filter((name) => typeof name !== "string").length;
-      const edgeRefs = edgeRefNames.filter((name): name is string => typeof name === "string");
-      if (!retry && missingRefs > 0) {
-        toast.warning(`有 ${missingRefs} 个附件的来源还没有图片，本次生成未使用`);
-      }
-      const uploadRefs = (node.data.uploadAttachments as string[] | undefined) ?? [];
+      let referenceAssets: string[];
+      try {
+        const resolved = retry ? null : resolveCanvasReferences(node, latestRef.current.nodes, latestRef.current.edges);
+        if (resolved?.pending) toast.warning(`有 ${resolved.pending} 个附件的来源还没有图片，本次生成未使用`);
+        referenceAssets = retry?.referenceAssets ?? resolved!.assets;
+      } catch (error) { toast.error(error instanceof Error ? error.message : "参考图无效"); return; }
       // 节点自身是生成结果；只有连入图片和上传附件参与生成。
-      const referenceAssets = retry?.referenceAssets ?? [...new Set([...edgeRefs, ...uploadRefs])];
       if (referenceAssets.length > ATTACHMENT_MAX) {
         toast.error(`参考图超过 ${ATTACHMENT_MAX} 张上限，请先移除多余附件`);
         return;
@@ -1026,30 +995,12 @@ export function FlowCanvas({
       const liveNames: Record<string, string> = { ...(data.attachmentNames ?? {}) };
       let inputs: VideoInput[] = retryRequest?.inputs ?? [];
       if (!retryRequest) {
-        const live: VideoInput[] = [];
-        let pending = 0;
-        for (const edge of latestRef.current.edges.filter((item) => item.target === nodeId)) {
-          const source = latestRef.current.nodes.find((item) => item.id === edge.source);
-          const assetName = source?.data.assetName;
-          const role = videoEdgeRole(edge);
-          if (typeof assetName === "string") {
-            liveNames[assetName] = String(source?.data.name || liveNames[assetName] || "图片");
-            if (!live.some((item) => item.assetName === assetName)) {
-              live.push({ assetName, role });
-            }
-          } else {
-            pending += 1;
-          }
-        }
-        for (const upload of data.uploadInputs ?? []) {
-          if (!live.some((item) => item.assetName === upload.assetName)) {
-            live.push(upload);
-          }
-        }
-        if (pending > 0) {
-          toast.warning(`有 ${pending} 个附件的来源还没有图片，本次生成未使用`);
-        }
-        inputs = live;
+        try {
+          const resolved = resolveCanvasReferences(node, latestRef.current.nodes, latestRef.current.edges);
+          inputs = resolved.inputs;
+          for (const reference of resolved.references) liveNames[reference.assetName] = reference.name;
+          if (resolved.pending) toast.warning(`有 ${resolved.pending} 个附件的来源还没有图片，本次生成未使用`);
+        } catch (error) { toast.error(error instanceof Error ? error.message : "参考图无效"); return; }
       }
       try {
         compileVideoPrompt(prompt, inputs);
@@ -1390,7 +1341,7 @@ export function FlowCanvas({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!desktopAvailable || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
-      if (event.target instanceof Element && event.target.closest('[role="dialog"], [role="menu"]')) return;
+      if (event.target instanceof Element && event.target.closest('[role="dialog"], [role="menu"], [data-workspace-overlay]')) return;
       if (event.key === "Escape") {
         // Nested popovers and reference suggestions handle Escape before it reaches here.
         if (isEditableTarget(event.target) && !(event.target instanceof Element && event.target.closest(".ui-prompt-panel"))) return;
@@ -1405,6 +1356,8 @@ export function FlowCanvas({
       }
       if (event.target instanceof HTMLVideoElement) return;
       if (isEditableTarget(event.target)) return;
+      const nextMode = interactionShortcut(event);
+      if (nextMode) { event.preventDefault(); setMode(nextMode); return; }
       if (event.metaKey || event.ctrlKey) {
         if (event.key === "=" || event.key === "+") {
           event.preventDefault();
@@ -1466,6 +1419,7 @@ export function FlowCanvas({
 
   // ---- 移动（拖动结束记一次撤销）----
   const onNodeDragStart = useCallback((_event: unknown, _node: Node, draggedNodes: Node[]) => {
+    setDragging(true);
     // 拖任何节点收起候选扇形
     closeCandidates(false);
     dragStartRef.current = draggedNodes.map((node) => ({
@@ -1476,6 +1430,7 @@ export function FlowCanvas({
   }, [closeCandidates]);
 
   const onNodeDragStop = useCallback(() => {
+    setDragging(false);
     const items = dragStartRef.current
       .map((start) => {
         const node = latestRef.current.nodes.find((item) => item.id === start.id);
@@ -1603,11 +1558,18 @@ export function FlowCanvas({
     [generate, generateVideo, setPrimaryResult, copyCandidateAsNode, openCandidates, closeCandidates, expandedNodeId, isNodeGenerationLocked, panelNodeId, deleteEdge, requestAttachmentUpload],
   );
 
+  const pickerNode = picker ? nodes.find(node => node.id === picker.nodeId) : undefined;
+  const uploading = uploads.some(item => item.state === "waiting" || item.state === "uploading");
+  let pickerBound: string[] = [];
+  if (pickerNode) { try { pickerBound = resolveCanvasReferences(pickerNode, nodes, edges).assets; } catch { /* 选择器显示实际校验错误。 */ } }
+  const openLibraryUpload = (source: CanvasLibrarySource = "imported") => { libraryUploadSourceRef.current = source; libraryUploadInputRef.current?.click(); };
+
   return (
+    <CanvasAssetsContext.Provider value={assetActions}>
     <CanvasActionsContext.Provider value={actions}>
       <div
         ref={wrapperRef}
-        className="relative h-full w-full"
+        className={`relative h-full w-full ${mode === "hand" ? "canvas-hand" : ""}`}
         onClick={() => {
           // 拖线松开会先弹菜单再触发同一次 click，忽略紧随其后的这次点击
           if (Date.now() - menuOpenedAtRef.current > 200) {
@@ -1630,8 +1592,10 @@ export function FlowCanvas({
           onMoveEnd={onMoveEnd}
           minZoom={0.1}
           maxZoom={2}
-          selectionOnDrag
-          panOnDrag={[1, 2]}
+          {...interactionConfig(mode)}
+          colorMode={resolvedTheme === "light" ? "light" : "dark"}
+          onConnectStart={() => setDragging(true)}
+          onMoveStart={() => setDragging(true)}
           panActivationKeyCode="Space"
           panOnScroll
           zoomOnScroll={false}
@@ -1674,15 +1638,6 @@ export function FlowCanvas({
           <Background variant={BackgroundVariant.Dots} gap={24} size={1} />
           <PromptPanel />
           <CandidatePanel />
-          {minimapOpen ? (
-            <MiniMap
-              pannable
-              position="bottom-left"
-              nodeColor="#3f3f46"
-              maskColor="rgba(9, 9, 11, 0.7)"
-              style={{ left: 12, bottom: 56, background: "var(--popover)", borderRadius: 8 }}
-            />
-          ) : null}
         </ReactFlow>
 
         {nodes.length === 0 ? (
@@ -1693,7 +1648,7 @@ export function FlowCanvas({
           />
         ) : null}
 
-        <div className="absolute left-3 top-1/2 z-20 -translate-y-[calc(50%+48px)]">
+        <div hidden={layout !== "scattered"} data-workspace-overlay className="absolute left-3 top-1/2 z-20 -translate-y-[calc(50%+48px)]">
           <ControlButton
             className="flex size-8 items-center justify-center rounded-full bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 hover:bg-accent"
             aria-label={menu?.kind === "add" ? "关闭添加菜单" : "添加节点"}
@@ -1733,10 +1688,14 @@ export function FlowCanvas({
           ) : null}
         </div>
 
-        <CanvasControls
-          minimapOpen={minimapOpen}
-          onToggleMinimap={() => setMinimapOpen((open) => !open)}
-        />
+        <CanvasToolbar canvasId={doc.id} containerRef={wrapperRef} mode={mode} onModeChange={next => { setMode(next); setMenu(null); }}
+          minimapOpen={minimapOpen} onToggleMinimap={() => setMinimapOpen(open => !open)}
+          onAddImage={() => { setMode("select"); pushAdd([addImageNode(viewportCenter())], []); }} onAddVideo={() => { setMode("select"); pushAdd([addVideoNode(viewportCenter())], []); }} onDraggingChange={setDragging} />
+        <AssetLibrary canvasName={doc.name} target={nodes.find(node => node.id === panelNodeId)} blocked={dragging || Boolean(picker)} uploading={uploading} onUpload={() => openLibraryUpload()}
+          onPlace={asset => { setMode("select"); pushAdd([addAssetNode(viewportCenter(), asset.assetName, asset.name)], []); }} />
+        {picker && pickerNode && <ReferencePicker key={`${picker.nodeId}:${picker.role}:${Boolean(picker.onSelect)}`} node={pickerNode} options={picker} bound={pickerBound} uploading={uploading}
+          onClose={() => { picker.onClose?.(); setPicker(null); }} onUpload={() => openLibraryUpload("manual")} />}
+        <input ref={libraryUploadInputRef} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={event => { onLibraryUpload(event.target.files); event.target.value = ""; }} />
 
         <input
           ref={uploadInputRef}
@@ -1934,5 +1893,6 @@ export function FlowCanvas({
         ) : null}
       </div>
     </CanvasActionsContext.Provider>
+    </CanvasAssetsContext.Provider>
   );
 }

@@ -74,6 +74,7 @@ export function isLoggedIn(auth: AuthFile): boolean {
 export async function clearAuth(authPath = defaultAuthPath()): Promise<void> {
   const auth = await loadAuth(authPath);
   auth.tokens = {};
+  delete auth.session_id;
   auth.last_auth_error = null;
   auth.pending_oauth = null;
   auth.profile = null;

@@ -30,6 +30,17 @@ const {
   pathToFileURL(path.join(temporary, "video-references.js")).href
 );
 
+test("同一图片的不同角色不能在槽位去重时被掩盖", () => {
+  assert.throws(() => videoInputsFromSlots([
+    { key: "a", assetName: "same.png", role: "first", name: "A" },
+    { key: "b", assetName: "same.png", role: "reference", name: "B" },
+  ]), /不能兼任/);
+  assert.deepEqual(videoInputsFromSlots([
+    { key: "a", assetName: "same.png", role: "reference", name: "A" },
+    { key: "b", assetName: "same.png", role: "reference", name: "B" },
+  ]), [{ assetName: "same.png", role: "reference" }]);
+});
+
 const ref = (assetName) => ({ assetName, role: "reference" });
 const at = (assetName) => `[[image:${assetName}]]`;
 

@@ -12,8 +12,10 @@ I have always wanted to build my own infinite canvas. Grok's image and video gen
 
 ## Features
 
-- **Generate and iterate on images**: text-to-image, multiple reference images, `@` references in prompts, and batches of 1, 2, or 4 candidates.
-- **Continue from images to video**: text-to-video, first and last frames, reference images, 6 / 10 / 15-second durations, and an audio toggle.
+- **Generate and iterate on images**: text-to-image, multiple reference images, `@` references to any image on the current canvas (including non-primary candidates), and batches of 1, 2, or 4 candidates.
+- **Continue from images to video**: text-to-video, first and last frames, reference images, 6 / 10 / 15-second durations, and an audio toggle. A finished video node can be dragged by its picture; play / seek / mute live in the bottom control bar (shown on hover).
+- **Canvas-scoped asset library**: upload several local images at once from the right-side drawer (there is no duplicate upload entry on the canvas), and generated results are registered automatically. The drawer supports search and filtering by generated / imported / manual, and binds an asset to any image or video node as a fixed reference. With the drawer pinned open you can also drag an image straight into a node's prompt box, which is exactly the same as referencing it with `@`.
+- **Toolbar and theme**: switch between select (`V`) and hand (`H`), hold Space to pan temporarily; nodes can be dragged in both modes — in hand mode a left-drag on empty canvas pans (in select mode it box-selects); the toolbar sits aggregated at the bottom by default, can be dragged to a custom position, and can be scattered or reset from the account menu; the appearance follows the system, light, or dark theme.
 - **Keep the creative process on the canvas**: pan, zoom, connect nodes, and manage multiple canvases. Generating a variation creates a new node while keeping the original image.
 - **Save results locally**: assets, canvases, and generation records are stored on your computer. Inspect generation parameters and download results. Video tasks persist their status so polling can resume.
 
@@ -22,6 +24,8 @@ I have always wanted to build my own infinite canvas. Grok's image and video gen
 Sign in through xAI OAuth; no API key is required in the project. The current integration uses the Grok Build OAuth client, so **the authorization page displays Grok Build**. This is not a separate official OAuth client for Grok Canvas. Long-term availability and permission to distribute this third-party integration have not been separately confirmed; it is provided as an experimental integration.
 
 Generation uses the allowance available to your own Grok account. The author has verified image and video generation with a Grok subscription. Available features and usage limits depend on your account; see the [official Grok documentation](https://docs.x.ai/grok/faq).
+
+Once signed in, the account menu shows a read-only **Grok shared usage · used xx%**. It reads the same shared pool as the Grok CLI `/usage` for your account; it is **not this canvas's usage, and not separate image or video allowances**. This endpoint is not a promised stable API. When it cannot be read, the menu shows "temporarily unavailable" instead of estimating a percentage from generation counts or cost.
 
 ## Quick start
 
@@ -45,9 +49,9 @@ pnpm dev
 Open **[http://127.0.0.1:3210](http://127.0.0.1:3210)** in a desktop browser. No `.env` configuration is needed by default.
 
 1. Click the sign-in button in the top-right corner and authorize your own account on the xAI authorization page.
-2. Return to the canvas and confirm that you are signed in. If the automatic callback does not complete, paste the authorization code into the sign-in popover. Start again if the sign-in attempt exceeds 10 minutes.
+2. Return to the canvas and confirm the top-right corner shows an avatar and a name (the part of your email before `@`). If the automatic callback does not complete, paste the authorization code into the sign-in popover. Start again if the sign-in attempt exceeds 10 minutes.
 3. Add an image node, enter a prompt, and generate your first image.
-4. Connect an image to another image or video node to use it as an input. For video, assign images as the first frame, last frame, or references.
+4. Reference images on the current canvas through the asset drawer, the attachment plus button, or `@` in the prompt; you can also connect one node to another, where a connection reference follows the source node's primary image.
 5. Download the results you like. Canvases save automatically and are available when you restart with the same local data.
 
 Press `Ctrl+C` in the terminal to stop the server. For regular use, you can also build and start a production server:
@@ -66,7 +70,10 @@ Both `dev` and `start` use local port 3210; run only one at a time. Do not build
 | Editing on a phone | The canvas is desktop-only. Minimum window size: 1100 × 640; recommended: 1440 × 900. |
 | Signed in but cannot generate | Signing in does not guarantee model access. Check account usage, plan permissions, and the error message. Sign in again if authentication has expired. |
 | Quota or rate-limit errors | Check your Grok account page and wait for limits to reset or follow the official guidance. Retrying generation may consume additional usage. |
-| Checking remaining usage | The app does not currently show remaining allowance or cost estimates. Check the usage page in your Grok account. |
+| Checking remaining usage | The account menu shows Grok shared usage; compare it with `/usage` in the Grok CLI for the same account. When the endpoint is unavailable it shows "temporarily unavailable" rather than an estimate. |
+| The asset library only shows this canvas | The library is bound to each canvas: switching canvases switches its assets, and a new canvas does not inherit assets from another canvas. |
+| Hand mode vs select mode | They differ in one thing only: a left-drag on empty canvas pans in hand mode and box-selects in select mode. Clicking, selecting, the edit panel, dragging nodes, and connecting are identical in both modes. |
+| Switching canvases while uploading or generating | The current canvas finishes importing and saving before switching; the browser warns about unfinished work if you reload or close the page. |
 | Port in use / HTTP 403 | Use `127.0.0.1:3210` or `localhost:3210`. Access checks and OAuth callbacks currently require this port; arbitrary ports and domains are not supported. |
 | Image upload fails | PNG / JPEG / WebP, up to 20 MB per image. Image generation accepts up to 5 reference images. |
 | 1080p video is unavailable | Videos with a last frame or reference images are limited to 720p. With only a first frame, the aspect ratio follows that frame. Up to 7 video reference images are supported. |
@@ -85,13 +92,15 @@ Default storage locations (`~` is your home directory):
   auth.json              # OAuth credentials
   data/
     app-state.json       # Most recently used canvas
-    canvases/            # Canvases, nodes, and edges
+    canvases/            # Canvases, nodes, edges, and canvas-scoped asset lists
     assets/              # Uploaded and generated images and videos
     generations/         # Generation records associated with assets
     video-tasks/         # Video requests and task status
 ```
 
 Generation records store the original and submitted prompts, model, parameters, and reference order. Later canvas edits do not overwrite them. Uploaded assets and older assets without records are not assigned invented generation histories. Deleting a canvas does not delete its asset files.
+
+The asset list is stored inside each canvas document: asset name, display name, and how the asset entered that canvas. Image files are shared on disk across canvases, while library membership stays scoped to the canvas. Deleting a node does not remove already registered assets, and this version does not physically delete assets.
 
 Your local server sends prompts and the reference images used for generation to xAI, then downloads results to your computer. Local storage does not mean offline generation.
 

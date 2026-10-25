@@ -14,7 +14,7 @@ for (const name of ["oauth", "store", "constants", "pkce", "client", "callback-h
   const output = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
   await writeFile(path.join(temporary, `${name}.js`), output.replace(/from "(\.\/[^".]+)"/g, 'from "$1.js"'));
 }
-const { beginLogin, completeLogin } = await import(pathToFileURL(path.join(temporary, "oauth.js")));
+const { beginLogin, completeLogin, refreshTokens } = await import(pathToFileURL(path.join(temporary, "oauth.js")));
 const { loadAuth, saveAuth, emptyAuthFile } = await import(pathToFileURL(path.join(temporary, "store.js")));
 const { authenticatedFetch } = await import(pathToFileURL(path.join(temporary, "client.js")));
 const { callbackHeaders } = await import(pathToFileURL(path.join(temporary, "callback-headers.js")));
@@ -95,6 +95,29 @@ test("near-expiry requests share a single proactive refresh", async () => {
   assert.equal((await loadAuth(file)).tokens.refresh_token, "refresh");
 });
 
+test("登录保留头像并为新会话分配独立标识", async () => {
+  const file = authPath();
+  const login = await begin(file);
+  const claims = Buffer.from(JSON.stringify({ email: "a@example.com", sub: "a", picture: "https://example.com/a.png" })).toString("base64url");
+  await completeLogin({ authPath: file, state: login.state, code: "code", fetch: async () => json({ access_token: "a", refresh_token: "r", id_token: `header.${claims}.signature` }) });
+  const saved = await loadAuth(file);
+  assert.equal(saved.profile.picture, "https://example.com/a.png");
+  assert.equal(typeof saved.session_id, "string");
+  await refreshTokens({ authPath: file, fetch: async () => json({ access_token: "b", refresh_token: "r2" }) });
+  assert.equal((await loadAuth(file)).session_id, saved.session_id);
+});
+
+test("退出之后在途刷新不能恢复已清除的凭据", async () => {
+  const file = authPath();
+  const auth = emptyAuthFile(); auth.tokens = { access_token: "a", refresh_token: "r" }; auth.session_id = "old";
+  await saveAuth(auth, file);
+  await assert.rejects(refreshTokens({ authPath: file, fetch: async () => {
+    const current = await loadAuth(file); current.tokens = {}; delete current.session_id; await saveAuth(current, file);
+    return json({ access_token: "late", refresh_token: "late-refresh" });
+  } }));
+  assert.equal((await loadAuth(file)).tokens.access_token, undefined);
+});
+
 test("callback CORS allows only the official accounts origin", () => {
   const allowed = callbackHeaders("https://accounts.x.ai");
   assert.equal(allowed.get("Access-Control-Allow-Origin"), "https://accounts.x.ai");
@@ -110,7 +133,9 @@ test("credential replacements are private and leave no temporary files", async (
   const file = path.join(dir, "auth.json");
   await writeFile(file, "{}", { mode: 0o644 });
   await saveAuth(emptyAuthFile(), file);
-  assert.equal((await stat(file)).mode & 0o777, 0o600);
+  // Windows 的 stat.mode 不表达 ACL，POSIX 权限位只在支持的平台验证。
+  if (process.platform !== "win32") assert.equal((await stat(file)).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(await readFile(file, "utf8")).version, 1);
   assert.deepEqual(await readdir(dir), ["auth.json"]);
 });
 

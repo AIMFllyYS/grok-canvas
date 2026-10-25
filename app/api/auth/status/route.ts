@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { safeProfilePicture } from "@/lib/account-display";
 import { defaultAuthPath, isLoggedIn, loadAuth } from "@/lib/xai/store";
 
 export const runtime = "nodejs";
@@ -9,6 +10,7 @@ export async function GET() {
   return NextResponse.json({
     loggedIn: isLoggedIn(auth),
     email: auth.profile?.email ?? null,
+    picture: safeProfilePicture(auth.profile?.picture),
     lastRefresh: auth.last_refresh,
     redirectUri: auth.redirect_uri,
     authPath: defaultAuthPath(),

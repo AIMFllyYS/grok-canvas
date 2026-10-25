@@ -1,11 +1,44 @@
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { dataDir } from "./data-dir";
+import { collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets, type CanvasLibraryAsset } from "./canvas-library";
 
 const DATA_DIR = dataDir();
 const CANVASES_DIR = path.join(DATA_DIR, "canvases");
 const APP_STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
+const writes = new Map<string, Promise<void>>();
+const deletedIds = new Set<string>();
+
+async function withCanvasLock<T>(id: string, action: () => Promise<T>): Promise<T> {
+  const previous = writes.get(id) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const tail = previous.then(() => gate);
+  writes.set(id, tail);
+  await previous;
+  try { return await action(); } finally {
+    release();
+    if (writes.get(id) === tail) writes.delete(id);
+  }
+}
+
+/**
+ * 原子替换目标文件。Windows 上并发 rename 或目标被短暂占用会返回 EPERM/EBUSY，
+ * 短暂重试即可成功，不需放宽原子性。
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code !== "EPERM" && code !== "EBUSY" && code !== "EACCES") || attempt >= 4) throw error;
+      await new Promise(resolve => setTimeout(resolve, 15 * (attempt + 1)));
+    }
+  }
+}
 
 export type CanvasSummary = {
   id: string;
@@ -24,6 +57,7 @@ export type CanvasDoc = {
   viewport: { x: number; y: number; zoom: number };
   nodes: unknown[];
   edges: unknown[];
+  libraryAssets?: CanvasLibraryAsset[];
 };
 
 export function isSafeCanvasId(id: string): boolean {
@@ -49,6 +83,7 @@ export function emptyCanvas(id: string): CanvasDoc {
     viewport: { x: 0, y: 0, zoom: 1 },
     nodes: [],
     edges: [],
+    libraryAssets: [],
   };
 }
 
@@ -59,7 +94,7 @@ export async function loadCanvas(id: string): Promise<CanvasDoc | null> {
     return JSON.parse(raw) as CanvasDoc;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return id === "default" ? emptyCanvas(id) : null;
+      return id === "default" && !deletedIds.has(id) ? emptyCanvas(id) : null;
     }
     throw error;
   }
@@ -74,22 +109,23 @@ export async function saveCanvas(
   doc: Omit<CanvasDoc, "revision" | "updatedAt">,
   expectedRevision: number,
 ): Promise<CanvasDoc | null> {
-  const current = await loadCanvas(doc.id);
-  const currentRevision = current?.revision ?? -1;
-  if (currentRevision !== expectedRevision) {
-    return null;
-  }
-  const next: CanvasDoc = {
-    ...doc,
-    revision: currentRevision + 1,
-    updatedAt: new Date().toISOString(),
-  };
-  const file = canvasPath(doc.id);
-  await mkdir(CANVASES_DIR, { recursive: true });
-  const tmp = `${file}.${crypto.randomUUID()}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(next)}\n`, "utf8");
-  await rename(tmp, file);
-  return next;
+  return withCanvasLock(doc.id, async () => {
+    if (deletedIds.has(doc.id)) return null;
+    const current = await loadCanvas(doc.id);
+    const currentRevision = current?.revision ?? -1;
+    if (currentRevision !== expectedRevision) return null;
+    let libraryAssets = mergeLibraryAssets(normalizeLibraryAssets(current?.libraryAssets), normalizeLibraryAssets(doc.libraryAssets));
+    libraryAssets = mergeLibraryAssets(libraryAssets, collectCanvasAssets(doc.nodes, doc.createdAt, libraryAssets));
+    const next: CanvasDoc = { ...doc, libraryAssets, revision: currentRevision + 1, updatedAt: new Date().toISOString() };
+    const file = canvasPath(doc.id);
+    await mkdir(CANVASES_DIR, { recursive: true });
+    const tmp = `${file}.${crypto.randomUUID()}.tmp`;
+    try {
+      await writeFile(tmp, `${JSON.stringify(next)}\n`, "utf8");
+      await renameWithRetry(tmp, file);
+    } finally { await unlink(tmp).catch(() => {}); }
+    return next;
+  });
 }
 
 /** Create a brand-new empty canvas and persist it. */
@@ -128,22 +164,34 @@ export async function loadLastCanvasId(): Promise<string | null> {
   }
 }
 
-export async function saveLastCanvasId(id: string): Promise<void> {
+// app-state.json 只记录最近画布；并发打开页面会同时写入，因此串行执行。
+let appStateQueue: Promise<void> = Promise.resolve();
+
+export function saveLastCanvasId(id: string): Promise<void> {
+  const task = appStateQueue.catch(() => {}).then(() => writeLastCanvasId(id));
+  appStateQueue = task.catch(() => {});
+  return task;
+}
+
+async function writeLastCanvasId(id: string): Promise<void> {
   await mkdir(DATA_DIR, { recursive: true });
   const tmp = `${APP_STATE_FILE}.${crypto.randomUUID()}.tmp`;
-  await writeFile(tmp, `${JSON.stringify({ lastCanvasId: id })}\n`, "utf8");
-  await rename(tmp, APP_STATE_FILE);
+  try {
+    await writeFile(tmp, `${JSON.stringify({ lastCanvasId: id })}\n`, "utf8");
+    await renameWithRetry(tmp, APP_STATE_FILE);
+  } finally { await unlink(tmp).catch(() => {}); }
 }
 
 /** Delete a canvas file. Returns false when it did not exist. Assets are untouched. */
 export async function deleteCanvas(id: string): Promise<boolean> {
-  try {
-    await unlink(canvasPath(id));
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
+  return withCanvasLock(id, async () => {
+    try {
+      await unlink(canvasPath(id));
+      deletedIds.add(id);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") { deletedIds.add(id); return false; }
+      throw error;
     }
-    throw error;
-  }
+  });
 }

@@ -32,6 +32,7 @@ export type AuthFile = {
   version: 1;
   provider: string;
   auth_mode: string;
+  session_id?: string;
   base_url: string;
   tokens: AuthTokens;
   discovery: {
@@ -42,5 +43,5 @@ export type AuthFile = {
   last_refresh: string | null;
   last_auth_error: LastAuthError | null;
   pending_oauth: PendingOAuth | null;
-  profile: { email?: string; sub?: string } | null;
+  profile: { email?: string; sub?: string; picture?: string } | null;
 };

@@ -97,7 +97,11 @@ export function videoInputsFromSlots(slots: VideoSlot[]): VideoInput[] {
   const inputs: VideoInput[] = [];
   const seen = new Set<string>();
   for (const slot of slots) {
-    if (!slot.assetName || seen.has(slot.assetName)) continue;
+    if (!slot.assetName) continue;
+    if (seen.has(slot.assetName)) {
+      if (inputs.find(input => input.assetName === slot.assetName)?.role !== slot.role) throw new Error("同一图片不能兼任首尾帧与参考图");
+      continue;
+    }
     seen.add(slot.assetName);
     inputs.push({ assetName: slot.assetName, role: slot.role });
   }

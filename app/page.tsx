@@ -13,6 +13,8 @@ import type { ImageNodeData } from "@/components/canvas/image-node";
 import type { CanvasDoc, CanvasSummary } from "@/lib/canvas-store";
 import { normalizeNodeResults, parseGenerationCount } from "@/lib/multi-image";
 import type { CanvasSaveStatus } from "@/lib/save-status";
+import { WorkspacePreferencesProvider } from "@/components/workspace-preferences";
+import { collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets } from "@/lib/canvas-library";
 
 const AUTH_RESULT_TEXT: Record<string, string> = {
   ok: "登录成功",
@@ -52,11 +54,13 @@ function normalizeDoc(loaded: CanvasDoc): CanvasDoc {
     ...edge,
     type: "scissor",
   }));
+  const knownAssets = normalizeLibraryAssets(loaded.libraryAssets);
+  loaded.libraryAssets = mergeLibraryAssets(knownAssets, collectCanvasAssets(loaded.nodes, loaded.createdAt, knownAssets));
   return loaded;
 }
 
 export default function Home() {
-  return <DesktopWorkspace><AuthProvider><Workspace /></AuthProvider></DesktopWorkspace>;
+  return <DesktopWorkspace><WorkspacePreferencesProvider><AuthProvider><Workspace /></AuthProvider></WorkspacePreferencesProvider></DesktopWorkspace>;
 }
 
 function Workspace() {
@@ -66,6 +70,14 @@ function Workspace() {
   const [doc, setDoc] = useState<CanvasDoc | null>(null);
   const [canvases, setCanvases] = useState<CanvasSummary[]>([]);
   const flushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const transitionRef = useRef(false);
+  const [transitioning, setTransitioning] = useState(false);
+  const transition = async (action: () => Promise<void>) => {
+    if (transitionRef.current) return;
+    transitionRef.current = true;
+    setTransitioning(true);
+    try { await action(); } finally { transitionRef.current = false; setTransitioning(false); }
+  };
 
   const handleSaveStatus = useCallback((status: CanvasSaveStatus) => {
     setSaveError(status.ok ? null : status.message);
@@ -167,6 +179,10 @@ function Workspace() {
   };
 
   const deleteCanvasById = async (id: string) => {
+    if (doc?.id === id && !(await flushCurrent())) {
+      toast.error("当前画布尚未保存，无法删除");
+      return;
+    }
     try {
       const response = await fetch(`/api/canvases/${id}`, { method: "DELETE" });
       if (!response.ok) {
@@ -207,9 +223,9 @@ function Workspace() {
           <CanvasSwitcher
             doc={doc}
             canvases={canvases}
-            onSwitch={(id) => void switchCanvas(id)}
-            onCreate={() => void createCanvas()}
-            onDelete={(id) => void deleteCanvasById(id)}
+            onSwitch={(id) => void transition(() => switchCanvas(id))}
+            onCreate={() => void transition(createCanvas)}
+            onDelete={(id) => void transition(() => deleteCanvasById(id))}
             onRename={renameCanvas}
           />
         ) : (
@@ -227,7 +243,8 @@ function Workspace() {
           />
         </div>
       ) : null}
-      <main className="min-h-0 flex-1">
+      {transitioning && <div role="status" className="border-b px-4 py-1 text-center text-xs text-muted-foreground">正在完成导入并保存画布…</div>}
+      <main className="min-h-0 flex-1" inert={transitioning}>
         {doc ? (
           <ReactFlowProvider>
             <FlowCanvas

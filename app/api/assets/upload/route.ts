@@ -1,15 +1,9 @@
 import { NextResponse } from "next/server";
 import { saveBufferAsset } from "@/lib/assets";
+import { validateUpload } from "@/lib/asset-upload";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const ALLOWED_TYPES = new Map([
-  ["image/png", "png"],
-  ["image/jpeg", "jpeg"],
-  ["image/webp", "webp"],
-]);
-const MAX_BYTES = 20 * 1024 * 1024;
 
 export async function POST(request: Request) {
   let form: FormData;
@@ -26,16 +20,16 @@ export async function POST(request: Request) {
   const saved = [];
   const rejected = [];
   for (const file of files) {
-    if (!ALLOWED_TYPES.has(file.type)) {
-      rejected.push({ name: file.name, reason: "仅支持 PNG / JPEG / WebP" });
-      continue;
+    const invalid = validateUpload(file);
+    if (invalid) { rejected.push({ name: file.name, reason: invalid }); continue; }
+    try {
+      const buffer = new Uint8Array(await file.arrayBuffer());
+      const mismatch = validateUpload(file, buffer);
+      if (mismatch) { rejected.push({ name: file.name, reason: mismatch }); continue; }
+      saved.push({ ...(await saveBufferAsset(buffer, file.type)), originalName: file.name });
+    } catch {
+      rejected.push({ name: file.name, reason: "图片保存失败，请检查磁盘空间后重试" });
     }
-    if (file.size > MAX_BYTES) {
-      rejected.push({ name: file.name, reason: "单张不能超过 20MB" });
-      continue;
-    }
-    const buffer = new Uint8Array(await file.arrayBuffer());
-    saved.push({ ...(await saveBufferAsset(buffer, file.type)), originalName: file.name });
   }
   return NextResponse.json({ assets: saved, rejected });
 }

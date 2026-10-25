@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopAvailable } from "@/components/desktop-workspace";
 
-export type AuthStatus = { loggedIn: boolean; email: string | null; pendingLogin: boolean; error: { code: string } | null };
+export type AuthStatus = { loggedIn: boolean; email: string | null; picture?: string | null; lastRefresh?: string | null; pendingLogin: boolean; error: { code: string } | null };
 export type LoginSession = { authorizeUrl: string; state: string; started: number };
 
 type AuthContextValue = {

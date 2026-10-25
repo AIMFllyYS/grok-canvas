@@ -1,7 +1,8 @@
 import { compilePrompt } from "@/lib/prompt-references";
 import { NextResponse } from "next/server";
 import { errorResponse } from "@/lib/api-error";
-import { assetToDataUri, isSafeAssetName } from "@/lib/assets";
+import { assetToDataUri } from "@/lib/assets";
+import { validateImageReferences } from "@/lib/canvas-references";
 import { persistImageBatch } from "@/lib/generation-batch";
 import { isGenerationCount, parseGenerationCount } from "@/lib/multi-image";
 import { editImage, generateImages } from "@/lib/xai/client";
@@ -11,7 +12,6 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 const MODEL = "grok-imagine-image-2.0";
-const REF_MAX = 5;
 
 type Body = {
   prompt?: string;
@@ -46,9 +46,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: { kind: "bad_request", message: "prompt is required" } }, { status: 400 });
   }
 
-  const refs = (body.referenceAssets ?? []).filter(isSafeAssetName).slice(0, REF_MAX);
+  let refs: string[];
   let compiledPrompt: string;
   try {
+    refs = validateImageReferences(body.referenceAssets ?? []);
     compiledPrompt = compilePrompt(prompt, refs);
   } catch (error) {
     return NextResponse.json({ error: { kind: "bad_request", message: (error as Error).message } }, { status: 400 });

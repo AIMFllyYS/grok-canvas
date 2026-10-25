@@ -6,17 +6,18 @@ import { Button } from "@/components/ui/button";
 import { PopoverSurface } from "@/components/ui/popover-surface";
 import { StatusFeedback } from "@/components/ui/status-feedback";
 import { useAuth } from "@/components/auth-status";
+import { AccountMenu } from "./account-menu";
 
 export function AuthWidget() {
+  return <div className="flex items-center gap-2"><LoginWidget /><AccountMenu /></div>;
+}
+
+function LoginWidget() {
   const desktopAvailable = useDesktopAvailable();
-  const { status, busy, error, session, open, code, setCode, setOpen, retryStatus, login, complete, cancel, logout } = useAuth();
+  const { status, busy, error, session, open, code, setCode, setOpen, retryStatus, login, complete, cancel } = useAuth();
 
   if (!status) return <StatusFeedback compact tone={error ? "error" : "muted"} message={error ?? "读取登录状态…"} retry={error ? retryStatus : undefined} />;
-  if (status.loggedIn) return <div className="flex items-center gap-2">
-    {error && <StatusFeedback compact tone="error" message={error} />}
-    <span role="status" className="max-w-64 truncate text-xs text-muted-foreground" title={status.email ?? undefined}>已登录{status.email ? ` · ${status.email}` : ""}</span>
-    <Button size="sm" variant="outline" onClick={() => void logout()} disabled={busy}>{busy ? "正在登出…" : "登出"}</Button>
-  </div>;
+  if (status.loggedIn) return null;
   return <Popover.Root open={open} onOpenChange={setOpen}>
     <Popover.Trigger render={<Button size="sm" />} onClick={() => { if (!session && !busy) void login(); }}>
       {busy ? "正在处理…" : session ? "等待授权…" : "登录 Grok"}

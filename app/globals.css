@@ -186,6 +186,18 @@
 
 /* Approved production interaction states. */
 html:root {
+  --ui-hover: #eeeeee;
+  --ui-selected: #dedede;
+  --ui-selected-hover: #d3d3d3;
+  --ui-selected-foreground: #202020;
+  --ui-selection-border: #444444;
+  --ui-focus: #525252;
+  --canvas-map-node: #b5b5bc;
+  --canvas-map-mask: rgba(245, 245, 247, 0.7);
+}
+html.dark {
+  --canvas-map-node: #3f3f46;
+  --canvas-map-mask: rgba(9, 9, 11, 0.7);
   --ui-hover: #343434;
   --ui-selected: #494949;
   --ui-selected-hover: #535353;
@@ -251,6 +263,16 @@ html:root :is(input, textarea, [contenteditable="true"]) { caret-color: var(--ui
   [data-ui-control], .ui-control, .ui-menu-surface { transition: none; }
   .ui-generation-animation * { animation: none !important; }
 }
+
+.canvas-tool-overlay { touch-action: none; }
+.canvas-hand .react-flow__pane, .canvas-hand .react-flow__node { cursor: grab; }
+.canvas-hand .react-flow__pane:active, .canvas-hand .react-flow__node.dragging { cursor: grabbing; }
+.ui-library-drawer { animation: library-enter 140ms ease-out; }
+/* 素材库可选区域：保留滚动，但不显示滚动条导航栏。 */
+.ui-scroll-hidden { scrollbar-width: none; -ms-overflow-style: none; }
+.ui-scroll-hidden::-webkit-scrollbar { width: 0; height: 0; display: none; }
+@keyframes library-enter { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) { .ui-library-drawer { animation: none; } }
 
 .desktop-required { min-height: 100dvh; padding: 32px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 16px; }
 .desktop-required h1 { font-size: 24px; font-weight: 600; }
