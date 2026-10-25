@@ -63,6 +63,19 @@ pnpm start
 
 Both `dev` and `start` use local port 3210; run only one at a time. Do not build in the same directory while the development server is running. Use a separate working directory to verify a production build if needed.
 
+## Desktop app
+
+Windows installers are published on [Releases](https://github.com/AIMFllyYS/grok-canvas/releases). The installed app does not require Node.js or a separate terminal process, and it uses the same `~/.grok-canvas` data directory as the browser version.
+
+To build the installer from source:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm desktop:build
+```
+
+The output is written to `release/`. Stop any running dev server first because both modes use port 3210. The installer is not code-signed, so Windows SmartScreen may show an unknown publisher warning.
+
 ## Limitations and troubleshooting
 
 | Situation | Details |
@@ -121,6 +134,10 @@ pnpm build
 `pnpm check` runs these checks in order. Automated tests use mocked requests and do not require sign-in or consume Grok usage. Contributions through issues and pull requests are welcome.
 
 Tell us about your first experience in [Issues](https://github.com/wangxiaosu/grok-canvas/issues): did installation work, could you generate images and videos, and where did you get stuck? Include your operating system, Node.js version, reproduction steps, and sanitized errors. Never share credentials. For security issues, ask the maintainer for a private reporting channel before sharing vulnerability details.
+
+## Project origin
+
+This project is based on [grok-canvas](https://github.com/wangxiaosu/grok-canvas), created by KyroX (GitHub: [@wangxiaosu](https://github.com/wangxiaosu)). The original repository and its contribution history remain the source of the project. This fork adds the desktop packaging and subsequent maintenance.
 
 ## License
 

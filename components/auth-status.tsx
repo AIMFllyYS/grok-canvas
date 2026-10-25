@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopAvailable } from "@/components/desktop-workspace";
+import { hasDesktopBridge, openExternalUrl } from "@/lib/desktop-bridge";
 
 export type AuthStatus = { loggedIn: boolean; email: string | null; picture?: string | null; lastRefresh?: string | null; pendingLogin: boolean; error: { code: string } | null };
 export type LoginSession = { authorizeUrl: string; state: string; started: number };
@@ -86,7 +87,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async () => {
     // Open synchronously with the click so browsers do not block an awaited window.open.
     popup.current?.close();
-    const child = window.open("about:blank", "grok-canvas-auth", "popup,width=760,height=820");
+    const desktop = hasDesktopBridge();
+    const child = desktop ? null : window.open("about:blank", "grok-canvas-auth", "popup,width=760,height=820");
     if (child) child.opener = null;
     popup.current = child;
     setBusy(true);
@@ -100,7 +102,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!response.ok || !payload.authorizeUrl || !payload.state) throw new Error();
       setStatus(current => current ? { ...current, error: null, pendingLogin: true } : current);
       setSession({ authorizeUrl: payload.authorizeUrl, state: payload.state, started: Date.now() });
-      if (child && !child.closed) child.location.href = payload.authorizeUrl;
+      if (desktop) openExternalUrl(payload.authorizeUrl);
+      else if (child && !child.closed) child.location.href = payload.authorizeUrl;
     } catch {
       child?.close();
       setError("无法发起登录，请重试");
