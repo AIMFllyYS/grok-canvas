@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useStore, Position, type Node, type NodeProps } from "@xyflow/react";
 import { NodeSurface } from "@/components/ui/node-surface";
 import { StatusFeedback } from "@/components/ui/status-feedback";
@@ -9,7 +9,7 @@ import { generationStatusFeedback, loginRequired } from "@/lib/generation-auth-f
 import type { VideoAspectRatio, VideoDuration, VideoResolution } from "@/lib/video-request";
 import type { VideoInput } from "@/lib/video-references";
 import type { VideoErrorKind, VideoGenerationRequest } from "@/lib/video-runtime";
-import { Video } from "lucide-react";
+import { Pause, Play, Video, Volume2, VolumeX } from "lucide-react";
 import { NodeActions } from "./node-actions";
 import { NodeTitle } from "./node-title";
 import { PlusHandle } from "./image-node";
@@ -40,6 +40,12 @@ export type VideoNodeData = {
 export type VideoFlowNode = Node<VideoNodeData, "video">;
 
 const BOX_SIZE = 280;
+
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const total = Math.floor(seconds);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
 
 function previewRatio(aspectRatio: VideoAspectRatio | null): number {
   if (!aspectRatio) return 16 / 9;
@@ -72,9 +78,30 @@ export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlow
   const failedFeedback = generationStatusFeedback(loggedIn);
   const [ratio, setRatio] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(data.waitedSeconds ?? 0);
+  // 播放器换成自绘控件：画面本体留给节点拖动，只有底部控制条是 nodrag。
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const togglePlay = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) void video.play().catch(() => {});
+    else video.pause();
+  };
+  const toggleMute = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setMuted(video.muted);
+  };
 
   useEffect(() => {
     setRatio(null);
+    setPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
   }, [data.assetName]);
 
   useEffect(() => {
@@ -113,19 +140,56 @@ export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlow
       </div>
       <NodeSurface selected={selected} zoom={zoom} className="relative flex items-center justify-center" style={boxStyle}>
         {data.assetName ? (
-          <video
-            src={`/api/assets/${encodeURIComponent(data.assetName)}`}
-            className="nodrag nopan h-full w-full object-contain"
-            controls
-            playsInline
-            preload="metadata"
-            onLoadedMetadata={(event) => {
-              const video = event.currentTarget;
-              if (video.videoWidth > 0 && video.videoHeight > 0) {
-                setRatio(video.videoWidth / video.videoHeight);
-              }
-            }}
-          />
+          <div className="group/video relative h-full w-full">
+            <video
+              ref={videoRef}
+              src={`/api/assets/${encodeURIComponent(data.assetName)}`}
+              aria-label={`视频：${data.name}`}
+              className="h-full w-full object-contain"
+              playsInline
+              preload="metadata"
+              onClick={togglePlay}
+              onLoadedMetadata={(event) => {
+                const video = event.currentTarget;
+                if (video.videoWidth > 0 && video.videoHeight > 0) {
+                  setRatio(video.videoWidth / video.videoHeight);
+                }
+                setDuration(Number.isFinite(video.duration) ? video.duration : 0);
+              }}
+              onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onEnded={() => setPlaying(false)}
+              onVolumeChange={(event) => setMuted(event.currentTarget.muted)}
+            />
+            <div
+              className={`nodrag nopan absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/70 via-black/25 to-transparent px-1.5 pb-1.5 pt-4 text-white/90 transition-opacity duration-150 ${playing ? "opacity-0 group-hover/video:opacity-100 group-focus-within/video:opacity-100" : "opacity-100"}`}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <button type="button" aria-label={playing ? "暂停" : "播放"} title={playing ? "暂停" : "播放"} onClick={togglePlay} className="flex size-6 shrink-0 items-center justify-center rounded-full hover:bg-white/15 focus-visible:outline-2 focus-visible:outline-white">
+                {playing ? <Pause size={13} /> : <Play size={13} />}
+              </button>
+              <input
+                type="range"
+                aria-label="播放进度"
+                min={0}
+                max={duration || 0}
+                step={0.05}
+                value={Math.min(currentTime, duration || 0)}
+                onChange={(event) => {
+                  const video = videoRef.current;
+                  const next = Number(event.target.value);
+                  if (video) video.currentTime = next;
+                  setCurrentTime(next);
+                }}
+                className="h-1 min-w-0 flex-1 cursor-pointer accent-white"
+              />
+              <span className="shrink-0 tabular-nums text-[10px]">{formatTime(currentTime)} / {formatTime(duration)}</span>
+              <button type="button" aria-label={muted ? "取消静音" : "静音"} title={muted ? "取消静音" : "静音"} onClick={toggleMute} className="flex size-6 shrink-0 items-center justify-center rounded-full hover:bg-white/15 focus-visible:outline-2 focus-visible:outline-white">
+                {muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
+              </button>
+            </div>
+          </div>
         ) : data.status === "failed" ? (
           <div className="nodrag nopan p-4">
             <StatusFeedback
