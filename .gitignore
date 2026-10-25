@@ -1,5 +1,7 @@
 node_modules/
 .next/
+# 升级/排查时另存的旧构建产物（.next.stale-* 等）
+.next.*/
 *.tsbuildinfo
 next-env.d.ts
 /data/
@@ -22,3 +24,7 @@ auth.*.json
 /.agents/
 /.impeccable/
 /.github/
+
+# 本地临时文件与 Windows 专用启动脚本，保留在本机但不进入仓库。
+.tmp-*
+start.cmd
