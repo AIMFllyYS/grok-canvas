@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { toast } from "sonner";
 import { AuthProvider } from "@/components/auth-status";
-import { AuthWidget } from "@/components/auth-widget";
 import { CanvasSwitcher } from "@/components/canvas-switcher";
 import { FlowCanvas } from "@/components/canvas/flow-canvas";
 import { DesktopWorkspace } from "@/components/desktop-workspace";
@@ -15,6 +14,7 @@ import { normalizeNodeResults, parseGenerationCount } from "@/lib/multi-image";
 import type { CanvasSaveStatus } from "@/lib/save-status";
 import { WorkspacePreferencesProvider } from "@/components/workspace-preferences";
 import { collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets } from "@/lib/canvas-library";
+import { StudioWorkspace } from "@/components/studio/studio-workspace";
 
 const AUTH_RESULT_TEXT: Record<string, string> = {
   ok: "登录成功",
@@ -60,10 +60,10 @@ function normalizeDoc(loaded: CanvasDoc): CanvasDoc {
 }
 
 export default function Home() {
-  return <DesktopWorkspace><WorkspacePreferencesProvider><AuthProvider><Workspace /></AuthProvider></WorkspacePreferencesProvider></DesktopWorkspace>;
+  return <WorkspacePreferencesProvider><AuthProvider><StudioWorkspace renderCanvas={(id,version,register)=><DesktopWorkspace><Workspace key={`${id}:${version}`} requestedCanvasId={id} onRegisterPrepare={register}/></DesktopWorkspace>} /></AuthProvider></WorkspacePreferencesProvider>;
 }
 
-function Workspace() {
+function Workspace({requestedCanvasId,onRegisterPrepare}:{requestedCanvasId:string;onRegisterPrepare:(prepare:()=>Promise<boolean>)=>void}) {
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveRetrying, setSaveRetrying] = useState(false);
@@ -98,11 +98,11 @@ function Workspace() {
       if (!response.ok) throw new Error("load failed");
       const payload = (await response.json()) as { canvases: CanvasSummary[]; lastCanvasId: string };
       setCanvases(payload.canvases);
-      await openCanvas(payload.lastCanvasId);
+      await openCanvas(requestedCanvasId || payload.lastCanvasId);
     } catch {
       setLoadFailed(true);
     }
-  }, [openCanvas]);
+  }, [openCanvas,requestedCanvasId]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -217,8 +217,8 @@ function Workspace() {
   };
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
+    <div className="relative flex h-full flex-col">
+      <div className="studio-canvas-picker">
         {doc ? (
           <CanvasSwitcher
             doc={doc}
@@ -231,8 +231,7 @@ function Workspace() {
         ) : (
           <span className="text-sm font-medium">grok-canvas</span>
         )}
-        <AuthWidget />
-      </header>
+      </div>
       {saveError ? (
         <div className="flex shrink-0 justify-center border-b px-4 py-2">
           <StatusFeedback
@@ -252,6 +251,7 @@ function Workspace() {
               doc={doc}
               onRegisterFlush={(flush) => {
                 flushRef.current = flush;
+                onRegisterPrepare(flush);
               }}
               onSaveStatus={handleSaveStatus}
             />

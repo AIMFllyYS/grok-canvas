@@ -32,7 +32,7 @@ import { interactionConfig, interactionShortcut, type InteractionMode } from "@/
 import { assetsFromOutcome, collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets, type CanvasLibraryAsset, type CanvasLibrarySource } from "@/lib/canvas-library";
 import { canvasSaveBody } from "@/lib/canvas-document";
 import { persistImageOutcome, persistVideoOutcome } from "@/lib/canvas-persistence";
-import { addFixedReferences, resolveCanvasReferences } from "@/lib/canvas-references";
+import { addFixedReferences, resolveCanvasReferences, isWorkflowControlEdge } from "@/lib/canvas-references";
 import { uploadAssets, type UploadProgress, type UploadedAsset } from "@/lib/asset-upload";
 import { CanvasAssetsContext, type ReferencePickerOptions } from "./canvas-assets-context";
 import { AssetLibrary } from "./asset-library";
@@ -106,8 +106,9 @@ import {
   type ImageNodeData,
 } from "./image-node";
 import { defaultVideoNodeData, VideoNode, type VideoFlowNode, type VideoNodeData } from "./video-node";
+import { WorkflowNode } from "./workflow-node";
 
-const nodeTypes = { image: ImageNode, asset: AssetNode, video: VideoNode };
+const nodeTypes = { image: ImageNode, asset: AssetNode, video: VideoNode, workflow: WorkflowNode };
 const edgeTypes = { scissor: ScissorEdge };
 
 function videoEdgeRole(edge: Edge): VideoInputRole {
@@ -118,7 +119,7 @@ function videoOccupancy(nodeId: string, nodes: Node[], edges: Edge[]): Array<{ r
   const node = nodes.find((item) => item.id === nodeId);
   const uploads = ((node?.data as VideoNodeData | undefined)?.uploadInputs) ?? [];
   return [
-    ...edges.filter((edge) => edge.target === nodeId).map((edge) => ({ role: videoEdgeRole(edge) })),
+    ...edges.filter((edge) => edge.target === nodeId&&!isWorkflowControlEdge(edge)).map((edge) => ({ role: videoEdgeRole(edge) })),
     ...uploads,
   ];
 }
@@ -599,7 +600,7 @@ export function FlowCanvas({
   const attachmentCountOf = useCallback((nodeId: string): number => {
     const node = latestRef.current.nodes.find((item) => item.id === nodeId);
     const uploads = (node?.data.uploadAttachments as string[] | undefined) ?? [];
-    const incoming = latestRef.current.edges.filter((edge) => edge.target === nodeId).length;
+    const incoming = latestRef.current.edges.filter((edge) => edge.target === nodeId&&!isWorkflowControlEdge(edge)).length;
     return uploads.length + incoming;
   }, []);
 

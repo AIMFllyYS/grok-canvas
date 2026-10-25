@@ -134,6 +134,7 @@ export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlow
         kind="video"
       />
       <PlusHandle type="target" position={Position.Left} className={selected ? "!opacity-100" : ""} />
+      {data.studioProjectId ? <PlusHandle type="source" position={Position.Right} isConnectable={false} className={selected ? "!opacity-100" : ""}/> : null}
       <div className="nodrag absolute -top-7 left-0 flex items-center gap-1.5">
         <Video className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <NodeTitle nodeId={id} name={data.name} />

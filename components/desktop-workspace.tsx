@@ -28,7 +28,7 @@ export function DesktopWorkspace({ children }: { children: React.ReactNode }) {
   }, []);
   return <>
     {opened && <DesktopAvailableContext.Provider value={available}>
-      <div hidden={!available} inert={!available}>{children}</div>
+      <div className="h-full" hidden={!available} inert={!available}>{children}</div>
     </DesktopAvailableContext.Provider>}
     {!available && <main className="desktop-required">
       <Monitor size={40} strokeWidth={1.5} aria-hidden="true" />

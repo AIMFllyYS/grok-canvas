@@ -15,7 +15,7 @@ test("packaged desktop runs the standalone server from resources/app", () => {
 
   assert.equal(launch.cwd, path.join(path.resolve("C:/Grok Canvas/resources"), "app"));
   assert.equal(launch.entry, path.join(path.resolve("C:/Grok Canvas/resources"), "app", "server.js"));
-  assert.equal(launch.nodePath, path.join(launch.cwd, "runtime_modules"));
+  assert.equal(launch.nodePath, path.join(launch.cwd, ".next", "node_modules"));
 });
 
 test("desktop development uses the repository standalone build", () => {

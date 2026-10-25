@@ -1,14 +1,15 @@
-import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
 // 与现有测试保持相同的临时转译方式，递归处理纯逻辑模块的相对依赖。
-export async function loadTypescript(entry) {
+export async function loadTypescript(entry, { packages = false } = {}) {
   const root = fileURLToPath(new URL("../../", import.meta.url));
   const directory = await mkdtemp(path.join(os.tmpdir(), "grok-workspace-test-"));
   const seen = new Set();
+  if (packages) await symlink(path.join(root, "node_modules"), path.join(directory, "node_modules"), process.platform === "win32" ? "junction" : "dir");
   await writeFile(path.join(directory, "package.json"), '{"type":"module"}');
   async function emit(relative) {
     if (seen.has(relative)) return;

@@ -8,7 +8,7 @@ function serverLaunch({ packaged, resourcesPath, appPath }) {
     return {
       cwd,
       entry: path.join(cwd, "server.js"),
-      nodePath: path.join(cwd, "runtime_modules"),
+      nodePath: path.join(cwd, ".next", "node_modules"),
     };
   }
   return {

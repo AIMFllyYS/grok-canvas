@@ -24,6 +24,7 @@ auth.*.json
 *.md
 !README.md
 !README.en.md
+!docs/aigc-workstation.md
 /.agents/
 /.impeccable/
 /.github/
@@ -31,3 +32,6 @@ auth.*.json
 # 本地临时文件与 Windows 专用启动脚本，保留在本机但不进入仓库。
 .tmp-*
 start.cmd
+
+# Local QA media, screenshots and account-specific evidence are not release assets.
+/artifacts/

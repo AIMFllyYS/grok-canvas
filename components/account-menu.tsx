@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { useTheme } from "next-themes";
-import { ChevronDown, Grip, LayoutPanelLeft, LogOut, Monitor, Moon, RotateCcw, Sun, UserRound } from "lucide-react";
+import { ChevronDown, Grip, LayoutPanelLeft, LogOut, Monitor, Moon, RotateCcw, Sun, UserRound, NotebookText } from "lucide-react";
 import { useAuth } from "./auth-status";
 import { useDesktopAvailable } from "./desktop-workspace";
 import { useWorkspacePreferences } from "./workspace-preferences";
@@ -44,8 +44,8 @@ export function AccountMenu() {
         </section>
         <section className="border-t px-2 py-3" aria-label="外观模式">
           <h3 className="mb-2 text-xs text-muted-foreground">外观</h3>
-          <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted/50 p-1">
-            {([{ value: "system", label: "系统", Icon: Monitor }, { value: "light", label: "日间", Icon: Sun }, { value: "dark", label: "夜间", Icon: Moon }] as const).map(({ value, label, Icon }) => <ControlButton key={value} aria-pressed={theme === value} onClick={() => setTheme(value)} className="flex h-8 items-center justify-center gap-1.5 rounded-md text-xs"><Icon size={13} />{label}</ControlButton>)}
+          <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted/50 p-1">
+            {([{ value: "system", label: "跟随系统", Icon: Monitor }, { value: "light", label: "米白", Icon: Sun }, { value: "dark", label: "高级黑", Icon: Moon }, { value:"paper",label:"纸张",Icon:NotebookText }] as const).map(({ value, label, Icon }) => <ControlButton key={value} aria-pressed={theme === value} onClick={() => setTheme(value)} className="flex h-8 items-center justify-center gap-1.5 rounded-md text-xs"><Icon size={13} />{label}</ControlButton>)}
           </div>
         </section>
         <div className="border-t"><UsageIndicator key={`${status?.loggedIn}:${status?.email}:${status?.lastRefresh}`} active={open} loggedIn={status?.loggedIn === true} /></div>
