@@ -33,7 +33,7 @@ export function DesktopWorkspace({ children }: { children: React.ReactNode }) {
       <Monitor size={40} strokeWidth={1.5} aria-hidden="true" />
       <h1>{checked ? "请稍微放大窗口" : "正在准备画布…"}</h1>
       {checked && <>
-        <p>为画布保留至少 320 × 360 的空间。窄屏也可以通过创作 Agent 操作工作流。</p>
+        <p>为画布保留至少 320 × 360 的空间。窄屏也可以通过创作 Agent 操作图片与视频节点。</p>
         {opened && <p role="status">当前画布仍保留，放大窗口即可继续。</p>}
       </>}
     </main>}

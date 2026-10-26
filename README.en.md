@@ -2,9 +2,9 @@
 
 [简体中文](README.md) | **English**
 
-**An AIGC workspace with an Agent, a director desk, and an infinite canvas — from an idea to a film.**
+**Bring Grok image and video generation onto an infinite canvas.**
 
-Sign in with your own Grok account, turn a brief and source materials into a director script, fixed references and timed action beats, then generate, review and assemble video clips. Switch to the infinite canvas to connect assets and explore variations freely.
+Sign in with your own Grok account, connect reference images, generate variations, and turn images into videos. Keep your assets and different versions on one canvas as you explore new directions.
 
 I have always wanted to build my own infinite canvas. Grok's image and video generation gave me a practical way to bring that idea to life, and to help existing Grok subscribers put their available usage allowance to work.
 
@@ -12,14 +12,11 @@ I have always wanted to build my own infinite canvas. Grok's image and video gen
 
 ## Features
 
-- **Agent and director workstation**: the default Agent uses Vercel AI SDK tools to produce scripts, fixed references, storyboard keyframes and videos. Review shots individually and assemble approved clips into an MP4 with FFmpeg.
-- **Source material and continuity**: upload images, TXT/Markdown, or MP4 with sampled keyframes; search project sources and public image references. Each 6 / 10 / 15-second clip has explicit action beats, shared style and negative constraints, and separate narration.
-- **Minimal workspace**: dark by default, with ivory and pale-yellow paper available in the account menu. A single top bar contains modes and a compact director view selector. The project drawer opens from the left edge and can be pinned or resized; the shot list is also resizable. Scrollbars stay hidden while scrolling remains available. Agent and director layouts support narrow screens. See [architecture and verification](docs/aigc-workstation.md). Assembly currently exports a silent picture cut; narration, music and subtitles are separate post-production work.
-
+- **Canvas Agent**: a movable, resizable chat panel with history and new-chat actions in one header. The composer starts at one line, with model selection and send controls alongside it. Custom popovers provide the local Grok CLI model catalog, Fast, reasoning effort, and context settings. The Agent operates directly on image/video nodes and reference links, with separate conversations per canvas.
 - **Generate and iterate on images**: text-to-image, multiple reference images, `@` references to any image on the current canvas (including non-primary candidates), and batches of 1, 2, or 4 candidates.
 - **Continue from images to video**: text-to-video, first and last frames, reference images, 6 / 10 / 15-second durations, and an audio toggle. A finished video node can be dragged by its picture; play / seek / mute live in the bottom control bar (shown on hover).
 - **Canvas-scoped asset library**: upload several local images at once from the right-side drawer (there is no duplicate upload entry on the canvas), and generated results are registered automatically. The drawer supports search and filtering by generated / imported / manual, and binds an asset to any image or video node as a fixed reference. With the drawer pinned open you can also drag an image straight into a node's prompt box, which is exactly the same as referencing it with `@`.
-- **Toolbar and theme**: switch between select (`V`) and hand (`H`), hold Space to pan temporarily; nodes can be dragged in both modes — in hand mode a left-drag on empty canvas pans (in select mode it box-selects); the toolbar sits aggregated at the bottom by default, can be dragged to a custom position, and can be scattered or reset from the account menu; the appearance supports system, ivory, ink, or pale-yellow paper themes.
+- **Toolbar and theme**: switch between select (`V`) and hand (`H`), hold Space to pan temporarily; nodes can be dragged in both modes — in hand mode a left-drag on empty canvas pans (in select mode it box-selects); the toolbar sits aggregated at the bottom by default, can be dragged to a custom position, and can be scattered or reset from the account menu; the appearance follows the system, light, or dark theme.
 - **Keep the creative process on the canvas**: pan, zoom, connect nodes, and manage multiple canvases. Generating a variation creates a new node while keeping the original image.
 - **Save results locally**: assets, canvases, and generation records are stored on your computer. Inspect generation parameters and download results. Video tasks persist their status so polling can resume.
 
@@ -84,7 +81,7 @@ The output is written to `release/`. Stop any running dev server first because b
 
 | Situation | Details |
 | --- | --- |
-| Editing on a phone | Agent and Director support mobile layouts. The freeform canvas requires a desktop, mouse and keyboard. Minimum canvas window: 1100 × 640; recommended: 1440 × 900. |
+| Editing on a phone | The canvas is desktop-only. Minimum window size: 1100 × 640; recommended: 1440 × 900. |
 | Signed in but cannot generate | Signing in does not guarantee model access. Check account usage, plan permissions, and the error message. Sign in again if authentication has expired. |
 | Quota or rate-limit errors | Check your Grok account page and wait for limits to reset or follow the official guidance. Retrying generation may consume additional usage. |
 | Checking remaining usage | The account menu shows Grok shared usage; compare it with `/usage` in the Grok CLI for the same account. When the endpoint is unavailable it shows "temporarily unavailable" rather than an estimate. |
@@ -110,6 +107,7 @@ Default storage locations (`~` is your home directory):
   data/
     app-state.json       # Most recently used canvas
     canvases/            # Canvases, nodes, edges, and canvas-scoped asset lists
+    agent/               # Agent conversations and model settings per canvas
     assets/              # Uploaded and generated images and videos
     generations/         # Generation records associated with assets
     video-tasks/         # Video requests and task status

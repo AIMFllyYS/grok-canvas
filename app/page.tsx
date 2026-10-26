@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { toast } from "sonner";
 import { AuthProvider } from "@/components/auth-status";
+import { AuthWidget } from "@/components/auth-widget";
 import { CanvasSwitcher } from "@/components/canvas-switcher";
 import { FlowCanvas } from "@/components/canvas/flow-canvas";
 import { DesktopWorkspace } from "@/components/desktop-workspace";
@@ -14,7 +15,8 @@ import { normalizeNodeResults, parseGenerationCount } from "@/lib/multi-image";
 import type { CanvasSaveStatus } from "@/lib/save-status";
 import { WorkspacePreferencesProvider } from "@/components/workspace-preferences";
 import { collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets } from "@/lib/canvas-library";
-import { StudioWorkspace } from "@/components/studio/studio-workspace";
+import { CanvasAgent } from "@/components/agent/panel";
+import { useTheme } from "next-themes";
 
 const AUTH_RESULT_TEXT: Record<string, string> = {
   ok: "登录成功",
@@ -60,10 +62,14 @@ function normalizeDoc(loaded: CanvasDoc): CanvasDoc {
 }
 
 export default function Home() {
-  return <WorkspacePreferencesProvider><AuthProvider><StudioWorkspace renderCanvas={(id,version,register,onCanvasChange)=><DesktopWorkspace><Workspace key={`${id}:${version}`} requestedCanvasId={id} onRegisterPrepare={register} onCanvasChange={onCanvasChange}/></DesktopWorkspace>} /></AuthProvider></WorkspacePreferencesProvider>;
+  const { theme, setTheme } = useTheme();
+  useEffect(() => { if (theme === "paper") setTheme("light"); }, [theme, setTheme]);
+  return <DesktopWorkspace><WorkspacePreferencesProvider><AuthProvider><Workspace /></AuthProvider></WorkspacePreferencesProvider></DesktopWorkspace>;
 }
 
-function Workspace({requestedCanvasId,onRegisterPrepare,onCanvasChange}:{requestedCanvasId:string;onRegisterPrepare:(prepare:()=>Promise<boolean>)=>void;onCanvasChange:(id:string)=>Promise<void>}) {
+function Workspace() {
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [canvasVersion, setCanvasVersion] = useState(0);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveRetrying, setSaveRetrying] = useState(false);
@@ -98,11 +104,11 @@ function Workspace({requestedCanvasId,onRegisterPrepare,onCanvasChange}:{request
       if (!response.ok) throw new Error("load failed");
       const payload = (await response.json()) as { canvases: CanvasSummary[]; lastCanvasId: string };
       setCanvases(payload.canvases);
-      await openCanvas(requestedCanvasId || payload.lastCanvasId);
+      await openCanvas(payload.lastCanvasId);
     } catch {
       setLoadFailed(true);
     }
-  }, [openCanvas,requestedCanvasId]);
+  }, [openCanvas]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -147,7 +153,7 @@ function Workspace({requestedCanvasId,onRegisterPrepare,onCanvasChange}:{request
       return;
     }
     try {
-      await onCanvasChange(id);
+      await openCanvas(id);
     } catch {
       toast.error("画布加载失败，请重试");
     }
@@ -164,7 +170,7 @@ function Workspace({requestedCanvasId,onRegisterPrepare,onCanvasChange}:{request
         { id: created.id, name: created.name, createdAt: created.createdAt, updatedAt: created.updatedAt },
         ...current,
       ]);
-      await onCanvasChange(created.id);
+      setDoc(created);
     } catch {
       toast.error("新建画布失败，请重试");
     }
@@ -197,7 +203,7 @@ function Workspace({requestedCanvasId,onRegisterPrepare,onCanvasChange}:{request
     if (doc && id === doc.id) {
       if (remaining[0]) {
         try {
-          await onCanvasChange(remaining[0].id);
+          await openCanvas(remaining[0].id);
         } catch {
           toast.error("画布加载失败，请重试");
         }
@@ -217,8 +223,8 @@ function Workspace({requestedCanvasId,onRegisterPrepare,onCanvasChange}:{request
   };
 
   return (
-    <div className="relative flex h-full flex-col">
-      <div className="studio-canvas-picker">
+    <div className="fixed inset-0 flex flex-col overflow-hidden">
+      <header className="flex h-12 shrink-0 items-center justify-between border-b px-4" inert={agentBusy}>
         {doc ? (
           <CanvasSwitcher
             doc={doc}
@@ -231,7 +237,8 @@ function Workspace({requestedCanvasId,onRegisterPrepare,onCanvasChange}:{request
         ) : (
           <span className="text-sm font-medium">grok-canvas</span>
         )}
-      </div>
+        <AuthWidget />
+      </header>
       {saveError ? (
         <div className="flex shrink-0 justify-center border-b px-4 py-2">
           <StatusFeedback
@@ -243,15 +250,14 @@ function Workspace({requestedCanvasId,onRegisterPrepare,onCanvasChange}:{request
         </div>
       ) : null}
       {transitioning && <div role="status" className="border-b px-4 py-1 text-center text-xs text-muted-foreground">正在完成导入并保存画布…</div>}
-      <main className="min-h-0 flex-1" inert={transitioning}>
+      <main className="min-h-0 flex-1" inert={transitioning || agentBusy}>
         {doc ? (
           <ReactFlowProvider>
             <FlowCanvas
-              key={doc.id}
+              key={`${doc.id}:${canvasVersion}`}
               doc={doc}
               onRegisterFlush={(flush) => {
                 flushRef.current = flush;
-                onRegisterPrepare(flush);
               }}
               onSaveStatus={handleSaveStatus}
             />
@@ -262,6 +268,7 @@ function Workspace({requestedCanvasId,onRegisterPrepare,onCanvasChange}:{request
           </div>
         )}
       </main>
+      {doc && <CanvasAgent key={doc.id} canvasId={doc.id} beforeSend={async () => (await flushRef.current?.()) ?? true} onBusy={setAgentBusy} onSettled={async () => { await openCanvas(doc.id); setCanvasVersion(v => v + 1); }}/>}
     </div>
   );
 }

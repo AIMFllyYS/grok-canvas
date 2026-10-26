@@ -30,7 +30,7 @@ export function ConversationScrollButton() {
   return (
     !isAtBottom && (
       <button
-        className="studio-scroll-bottom"
+        className="agent-scroll-bottom"
         aria-label="滚动到最新消息"
         onClick={() => void scrollToBottom()}
       >

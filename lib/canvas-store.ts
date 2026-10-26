@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/pro
 import path from "node:path";
 import { dataDir } from "./data-dir";
 import { collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets, type CanvasLibraryAsset } from "./canvas-library";
+import { cleanCanvas } from "./canvas-cleanup";
 
 const DATA_DIR = dataDir();
 const CANVASES_DIR = path.join(DATA_DIR, "canvases");
@@ -94,7 +95,7 @@ export function emptyCanvas(id: string): CanvasDoc {
 export async function loadCanvas(id: string): Promise<CanvasDoc | null> {
   try {
     const raw = await readFile(canvasPath(id), "utf8");
-    return JSON.parse(raw) as CanvasDoc;
+    return cleanCanvas(JSON.parse(raw) as CanvasDoc);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return id === "default" && !deletedIds.has(id) ? emptyCanvas(id) : null;

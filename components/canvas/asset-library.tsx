@@ -6,7 +6,6 @@ import { AssetLibraryGrid } from "./asset-library-grid";
 import { useCanvasAssets } from "./canvas-assets-context";
 import { AssetImage } from "../ui/asset-image";
 import { ControlButton } from "../ui/control-button";
-import { WorkButton } from "@/components/pre/primitives";
 import { Button } from "../ui/button";
 import { useDesktopAvailable } from "../desktop-workspace";
 import type { CanvasLibraryAsset } from "@/lib/canvas-library";
@@ -24,8 +23,6 @@ export function AssetLibrary({ canvasName, target, blocked, onUpload, onPlace, u
   const [previewFailed, setPreviewFailed] = useState(false);
   const panel = useRef<HTMLElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (open && pinned) window.dispatchEvent(new Event("grok-canvas:library-open")); }, [open, pinned]);
-  useEffect(() => { const close = () => { setOpen(false); setPinned(false); }; window.addEventListener("grok-canvas:agent-open", close); return () => window.removeEventListener("grok-canvas:agent-open", close); }, []);
   // 拖素材到提示词时鼠标会离开抽屉，这时不能自动收起，否则刚拿起的图会被抽走。
   const dragging = useRef(false);
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -36,7 +33,7 @@ export function AssetLibrary({ canvasName, target, blocked, onUpload, onPlace, u
     clearTimers();
     return clearTimers;
   }, [available, blocked]);
-  const enter = () => { clearTimers(); if (!blocked && !document.querySelector('.pre-floating:not([hidden])')) enterTimer.current = setTimeout(() => setOpen(true), 250); };
+  const enter = () => { clearTimers(); if (!blocked) enterTimer.current = setTimeout(() => setOpen(true), 250); };
   const leave = () => {
     clearTimers();
     if (dragging.current) return;
@@ -58,11 +55,11 @@ export function AssetLibrary({ canvasName, target, blocked, onUpload, onPlace, u
       <AssetLibraryGrid assets={assets} selected={preview ? [preview.assetName] : []} onSelect={selectPreview} draggable
         onAssetDragStart={() => { dragging.current = true; clearTimers(); }}
         onAssetDragEnd={() => { dragging.current = false; leave(); }} />
-      {preview && <section className="pre-library-preview shrink-0 space-y-2 border-t pt-3" aria-label="素材预览">
-        <div className="flex items-center gap-3"><AssetImage src={`/api/assets/${encodeURIComponent(preview.assetName)}`} alt={preview.name} className="size-16 rounded-md object-contain" onError={() => setPreviewFailed(true)} onLoad={() => setPreviewFailed(false)} /><div className="min-w-0"><p className="truncate text-xs" title={preview.name}>{preview.name}</p><WorkButton onClick={() => onPlace(preview)} disabled={previewFailed} className="mt-1">放到画布</WorkButton></div></div>
+      {preview && <section className="shrink-0 space-y-2 border-t pt-3" aria-label="素材预览">
+        <div className="flex items-center gap-3"><AssetImage src={`/api/assets/${encodeURIComponent(preview.assetName)}`} alt={preview.name} className="size-16 rounded-md object-contain" onError={() => setPreviewFailed(true)} onLoad={() => setPreviewFailed(false)} /><div className="min-w-0"><p className="truncate text-xs" title={preview.name}>{preview.name}</p><ControlButton onClick={() => onPlace(preview)} disabled={previewFailed} className="mt-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground">放到画布</ControlButton></div></div>
         {editable && target ? <div className="flex flex-wrap gap-1">{(target.type === "video" ? ["first", "reference", "last"] as const : ["reference"] as const).map(role => {
           const reason = referenceError(target.id, [preview], role);
-          return <WorkButton key={role} disabled={Boolean(reason) || previewFailed} title={reason ?? `添加到${String(target.data.name || "节点")}`} onClick={() => applyReference(role)} className="flex-1">用作{VIDEO_ROLE_LABELS[role]}</WorkButton>;
+          return <ControlButton key={role} disabled={Boolean(reason) || previewFailed} title={reason ?? `添加到${String(target.data.name || "节点")}`} onClick={() => applyReference(role)} className="flex-1 rounded-md bg-muted px-2 py-2 text-[11px] disabled:opacity-40">用作{VIDEO_ROLE_LABELS[role]}</ControlButton>;
         })}</div> : <p className="text-[11px] text-muted-foreground">选中图片或视频节点后，可添加为参考</p>}
       </section>}
     </aside>}

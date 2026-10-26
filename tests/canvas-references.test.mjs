@@ -10,13 +10,6 @@ const image = (id, data = {}) => ({ id, type: "image", data: { uploadAttachments
 const video = (id, data = {}) => ({ id, type: "video", data: { uploadInputs: [], ...data } });
 const asset = assetName => ({ assetName, name: assetName });
 
-test("导演台流程连线不被误当成未就绪图片附件",()=>{
-  const target=image("reference");
-  const script={id:"script",type:"workflow",data:{name:"script"}};
-  const resolved=resolveCanvasReferences(target,[script,target],[{source:"script",target:"reference",data:{studioControl:true}}]);
-  assert.equal(resolved.pending,0);assert.equal(resolved.occupied,0);assert.deepEqual(resolved.assets,[]);
-});
-
 test("同图的连线和固定参考只提交一次", () => {
   const target = image("t", { uploadAttachments: ["a.png"] });
   const result = resolveCanvasReferences(target, [image("s", { assetName: "a.png" }), target], [{ id: "e", source: "s", target: "t" }]);

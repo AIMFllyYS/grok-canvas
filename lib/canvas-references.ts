@@ -5,7 +5,6 @@ import type { PromptReference } from "./prompt-references";
 export const IMAGE_REFERENCE_MAX = 5;
 export type ReferenceNode = { id: string; type?: string; data: Record<string, unknown> };
 export type ReferenceEdge = { id?: string; source: string; target: string; data?: Record<string, unknown> };
-export function isWorkflowControlEdge(edge:ReferenceEdge):boolean{return edge.data?.studioControl===true;}
 export type ResolvedReferences = { assets: string[]; inputs: VideoInput[]; references: PromptReference[]; occupied: number; pending: number };
 
 export function validateImageReferences(values: unknown): string[] {
@@ -17,7 +16,7 @@ export function validateImageReferences(values: unknown): string[] {
 
 export function resolveCanvasReferences(node: ReferenceNode, nodes: ReferenceNode[], edges: ReferenceEdge[]): ResolvedReferences {
   const video = node.type === "video";
-  const incoming = edges.filter(edge => edge.target === node.id&&!isWorkflowControlEdge(edge) && edge.data?.promptInput !== true && !["text", "prompt"].includes(nodes.find(n => n.id === edge.source)?.type ?? ""));
+  const incoming = edges.filter(edge => edge.target === node.id);
   const byId = new Map(nodes.map(source => [source.id, source]));
   const names = { ...node.data.attachmentNames as Record<string, string> | undefined };
   const inputs: VideoInput[] = [];

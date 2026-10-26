@@ -12,19 +12,19 @@ export function Message({
 }: ComponentProps<"div"> & { from: "user" | "assistant" | "system" }) {
   return (
     <div
-      className={cn("studio-message", `studio-message-${from}`, className)}
+      className={cn("agent-message", `agent-message-${from}`, className)}
       data-role={from}
       {...props}
     />
   );
 }
 export function MessageContent(props: ComponentProps<"div">) {
-  return <div className="studio-message-content" {...props} />;
+  return <div className="agent-message-content" {...props} />;
 }
 export function MessageResponse({ className, ...props }: StreamdownProps) {
   return (
     <Streamdown
-      className={cn("studio-markdown", className)}
+      className={cn("agent-markdown", className)}
       plugins={{ cjk, code }}
       animated={{ animation: "fadeIn", duration: 180, sep: "word" }}
       {...props}

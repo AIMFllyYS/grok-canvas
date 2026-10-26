@@ -1,6 +1,6 @@
 {
   "name": "grok-canvas",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "在无限画布上使用 Grok 生成、连接和迭代图片与视频。",
   "license": "MIT",
@@ -18,8 +18,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace && pnpm test:studio",
-    "test:studio": "node --test tests/studio.test.mjs tests/studio-workstation.test.mjs tests/studio-sdk.test.mjs",
+    "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace && pnpm test:agent",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "next dev -H 127.0.0.1 -p 3210",
     "build": "next build",
@@ -31,14 +30,14 @@
     "desktop:bundle": "pnpm desktop:prepare && pnpm desktop:deps && pnpm desktop:finish",
     "desktop:build": "pnpm build && pnpm desktop:bundle && electron-builder --win nsis",
     "desktop:pack": "pnpm desktop:bundle && electron-builder --win nsis",
-    "desktop:smoke": "node scripts/smoke-desktop.mjs",
     "typecheck": "tsc --noEmit",
     "test:ui": "node --experimental-strip-types --test tests/floating-placement.test.mjs tests/page-zoom-guard.test.mjs tests/save-status.test.mjs tests/generation-auth-feedback.test.mjs",
     "test:generation": "node --experimental-strip-types --test tests/generation-record.test.mjs tests/generation-details.test.mjs tests/generation-registry.test.mjs tests/multi-image.test.mjs tests/generation-batch.test.mjs",
     "test:auth": "node --test tests/oauth.test.mjs",
     "test:video": "node --experimental-strip-types --test tests/video-references.test.mjs tests/video-request.test.mjs tests/video-tasks.test.mjs tests/video-route.test.mjs tests/video-runtime.test.mjs",
     "test:security": "node --experimental-strip-types --test tests/local-access.test.mjs",
-    "test:workspace": "node --test tests/workspace-preferences.test.mjs tests/account-display.test.mjs tests/canvas-interaction.test.mjs tests/usage.test.mjs tests/canvas-library.test.mjs tests/canvas-references.test.mjs tests/canvas-store.test.mjs tests/canvas-route.test.mjs tests/canvas-persistence.test.mjs tests/asset-upload.test.mjs tests/prompt-editor.test.mjs tests/asset-drag.test.mjs tests/desktop-runtime.test.mjs tests/desktop-bridge.test.mjs"
+    "test:workspace": "node --test tests/workspace-preferences.test.mjs tests/account-display.test.mjs tests/canvas-interaction.test.mjs tests/usage.test.mjs tests/canvas-library.test.mjs tests/canvas-references.test.mjs tests/canvas-store.test.mjs tests/canvas-route.test.mjs tests/canvas-persistence.test.mjs tests/asset-upload.test.mjs tests/prompt-editor.test.mjs tests/asset-drag.test.mjs tests/desktop-runtime.test.mjs tests/desktop-bridge.test.mjs",
+    "test:agent": "node --test tests/agent.test.mjs tests/agent-sdk.test.mjs"
   },
   "build": {
     "appId": "com.aimfllyys.grokcanvas",

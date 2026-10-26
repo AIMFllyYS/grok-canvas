@@ -1,0 +1,739 @@
+/* Scoped Agent surfaces; the canvas and account controls keep their original styles. */
+.agent-floating {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow:
+    0 18px 64px #0002,
+    0 2px 8px #0001;
+}
+.agent-floating[hidden] {
+  display: none !important;
+}
+.agent-floating-chrome {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--popover);
+}
+.agent-drag-handle {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  font-size: 11px;
+  color: var(--foreground);
+  cursor: grab;
+  touch-action: none;
+}
+.agent-drag-handle > svg:last-child {
+  color: var(--muted-foreground);
+  opacity: 0.55;
+  margin-left: 3px;
+}
+.agent-drag-handle:active {
+  cursor: grabbing;
+}
+.agent-floating-chrome .agent-button {
+  padding: 0;
+  width: 23px;
+  height: 23px;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.agent-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-size: 11px;
+  background: var(--muted);
+  cursor: pointer;
+}
+.agent-button:hover {
+  background: var(--accent);
+}
+.agent-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.agent-resize-handle {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  cursor: nwse-resize;
+  touch-action: none;
+  color: var(--muted-foreground);
+}
+.agent-launcher {
+  position: fixed;
+  bottom: 22px;
+  right: 22px;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--popover);
+  color: var(--foreground);
+  padding: 10px 13px;
+  font-size: 12px;
+  box-shadow: 0 4px 16px #0002;
+  cursor: pointer;
+}
+.agent-launcher i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1s infinite;
+}
+.canvas-agent {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  font-size: 12px;
+}
+.agent-icon-button {
+  width: 27px;
+  height: 27px;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 7px;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+.agent-icon-button:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.agent-icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.canvas-agent [role="log"] {
+  min-height: 0;
+}
+.canvas-agent [role="log"] > div {
+  scrollbar-width: thin;
+}
+.canvas-agent [role="log"] > div > div {
+  gap: 17px;
+  padding: 15px;
+}
+.agent-author {
+  font-size: 10px;
+  color: var(--muted-foreground);
+  margin-bottom: 5px;
+}
+.agent-message {
+  min-width: 0;
+}
+.agent-message-user {
+  align-self: flex-end;
+  max-width: 92%;
+}
+.agent-message-user .agent-message-content {
+  padding: 8px 11px;
+  border-radius: 11px 11px 3px 11px;
+  background: var(--muted);
+}
+.agent-message-assistant {
+  width: 100%;
+}
+.agent-markdown {
+  font-size: 12px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.agent-markdown > * + * {
+  margin-top: 8px;
+}
+.agent-markdown p {
+  margin: 0;
+}
+.agent-markdown h1,
+.agent-markdown h2,
+.agent-markdown h3 {
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.agent-markdown ul,
+.agent-markdown ol {
+  padding-left: 18px;
+}
+.agent-markdown ul {
+  list-style: disc;
+}
+.agent-markdown ol {
+  list-style: decimal;
+}
+.agent-markdown li + li {
+  margin-top: 3px;
+}
+.agent-markdown pre {
+  overflow: auto;
+  max-width: 100%;
+  font-size: 11px;
+}
+.agent-markdown table {
+  font-size: 11px;
+}
+.agent-markdown a {
+  text-decoration: underline;
+}
+.agent-markdown [data-streamdown="code-block"] {
+  font-size: 11px;
+  max-width: 100%;
+}
+.agent-empty {
+  padding: 32px 15px;
+  color: var(--muted-foreground);
+}
+.agent-empty p {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+  margin: 13px 0 4px;
+}
+.agent-empty span {
+  font-size: 11px;
+  line-height: 1.7;
+}
+.agent-composer {
+  flex-shrink: 0;
+  margin: 8px 12px 14px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  transition: box-shadow 0.15s;
+}
+.agent-composer:focus-within {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 20%, transparent);
+}
+.agent-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  min-height: 28px;
+}
+.agent-input-row textarea {
+  align-self: center;
+  display: block;
+  flex: 1;
+  min-width: 40px;
+  height: 24px;
+  min-height: 24px;
+  max-height: 120px;
+  resize: none;
+  overflow-y: auto;
+  padding: 2px 3px;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  scrollbar-width: thin;
+}
+.agent-input-row textarea::placeholder {
+  color: var(--muted-foreground);
+}
+.agent-send {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--foreground);
+  color: var(--background);
+  cursor: pointer;
+}
+.agent-send:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+.agent-attachments {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 2px 2px 7px;
+}
+.agent-attachments > span {
+  max-width: 180px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 5px;
+  border-radius: 6px;
+  background: var(--muted);
+  font-size: 10px;
+}
+.agent-attachments > span > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.agent-attachments button {
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.agent-model-trigger {
+  display: flex;
+  align-items: center;
+  align-self: flex-end;
+  gap: 4px;
+  height: 28px;
+  max-width: 128px;
+  padding: 0 6px;
+  border-radius: 7px;
+  font-size: 10px;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.agent-model-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-model-trigger:hover,
+.agent-model-trigger[data-popup-open] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.agent-menu-layer {
+  z-index: 100;
+}
+.agent-model-menu,
+.agent-history-menu,
+.agent-select-popup {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow:
+    0 12px 40px #0002,
+    0 2px 6px #0001;
+  outline: 0;
+  font-size: 12px;
+  max-width: calc(100vw - 24px);
+}
+.agent-model-menu {
+  width: 282px;
+  padding: 7px;
+  max-height: min(560px, var(--available-height));
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.agent-model-menu > header,
+.agent-history-menu > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 7px 9px;
+  gap: 12px;
+}
+.agent-model-menu > header h2,
+.agent-history-menu > header h2 {
+  font-size: 11px;
+  font-weight: 600;
+}
+.agent-model-menu > header > span {
+  font-size: 9px;
+  color: var(--muted-foreground);
+}
+.agent-model-options {
+  display: grid;
+  gap: 2px;
+}
+.agent-model-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+  min-height: 44px;
+}
+.agent-model-option:hover,
+.agent-model-option[aria-pressed="true"] {
+  background: var(--accent);
+}
+.agent-model-option strong {
+  font-size: 12px;
+  font-weight: 500;
+  display: block;
+}
+.agent-model-option small {
+  display: block;
+  font-size: 9px;
+  color: var(--muted-foreground);
+  margin-top: 2px;
+}
+.agent-model-option:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.agent-effort-menu {
+  width: 256px;
+  padding: 10px 11px 6px;
+}
+.agent-effort-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+.agent-effort-heading > div {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+}
+.agent-effort-heading h2 {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: #3478f6;
+}
+.agent-model-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin-top: 1px;
+  font-size: 10px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.agent-model-link:hover {
+  color: var(--foreground);
+}
+.agent-fast-button[aria-pressed="true"] {
+  color: #3478f6;
+  background: #3478f610;
+}
+.agent-effort-slider {
+  margin: 10px 0 6px;
+}
+.agent-slider-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  margin: 0 4px;
+  touch-action: none;
+  user-select: none;
+}
+.agent-slider-track {
+  position: relative;
+  flex: 1;
+  height: 24px;
+  border-radius: 24px;
+  background: var(--muted);
+}
+.agent-slider-fill {
+  position: absolute;
+  height: 100%;
+  border-radius: inherit;
+  background: #3478f6;
+}
+.agent-slider-dot {
+  position: absolute;
+  top: 10px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+  opacity: 0.35;
+  pointer-events: none;
+}
+.agent-slider-thumb {
+  width: 26px;
+  height: 26px;
+  background: #fff;
+  border: 1px solid #0001;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px #0001;
+  outline: 0;
+}
+.agent-slider-thumb:focus-visible {
+  outline: 2px solid #3478f6;
+  outline-offset: 3px;
+}
+.agent-effort-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 25px;
+  padding-top: 2px;
+  font-size: 9px;
+  color: var(--muted-foreground);
+}
+.agent-effort-context .agent-select-trigger {
+  height: 24px;
+  padding: 0 4px;
+  border: 0;
+  font-size: 9px;
+  min-width: 0;
+  background: transparent;
+}
+.agent-model-list {
+  width: 256px;
+}
+.agent-model-list > header {
+  padding: 0 3px 6px;
+}
+.agent-model-list > header h2 {
+  flex: 1;
+}
+.agent-select-trigger {
+  height: 27px;
+  min-width: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  font-size: 10px;
+  cursor: pointer;
+}
+.agent-select-trigger:disabled {
+  opacity: 0.45;
+}
+.agent-select-popup {
+  min-width: 110px;
+  padding: 4px;
+  border-radius: 9px;
+}
+.agent-select-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  outline: 0;
+}
+.agent-select-item[data-highlighted],
+.agent-select-item[data-selected] {
+  background: var(--accent);
+}
+.agent-history-menu {
+  width: 276px;
+  padding: 7px;
+}
+.agent-history-menu > div {
+  max-height: 280px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.agent-history-menu > div > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.agent-history-menu > div > button:hover,
+.agent-history-menu > div > button[aria-pressed="true"] {
+  background: var(--accent);
+}
+.agent-history-menu > div > button > span {
+  flex: 1;
+  min-width: 0;
+}
+.agent-history-menu strong {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-history-menu small {
+  display: block;
+  font-size: 9px;
+  color: var(--muted-foreground);
+  margin-top: 3px;
+}
+.agent-history-menu button:disabled {
+  opacity: 0.5;
+}
+.agent-menu-error,
+.agent-error {
+  padding: 8px;
+  font-size: 11px;
+  color: var(--destructive);
+}
+.agent-error button {
+  display: inline-flex;
+  margin-top: 5px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.agent-loading {
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  flex: 1;
+  font-size: 12px;
+  padding: 20px;
+}
+.agent-reasoning {
+  font-size: 11px;
+  margin: 5px 0 9px;
+  border-left: 1px solid var(--border);
+  padding-left: 9px;
+  color: var(--muted-foreground);
+}
+.agent-reasoning button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.agent-reasoning [data-panel] {
+  padding-top: 7px;
+}
+.agent-tool {
+  margin: 7px 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.agent-tool-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 9px;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.agent-tool-header > span:first-of-type {
+  flex: 1;
+}
+.agent-tool-status,
+.agent-badge-error {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.agent-badge-error {
+  color: var(--destructive);
+}
+.agent-tool-content {
+  padding: 3px 10px 10px;
+}
+.agent-eyebrow {
+  font-size: 9px;
+  color: var(--muted-foreground);
+  margin: 7px 0 5px;
+}
+.agent-parameters > div {
+  display: grid;
+  grid-template-columns: minmax(60px, 28%) 1fr;
+  gap: 9px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.agent-parameters dt {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  color: var(--muted-foreground);
+}
+.agent-parameters dd {
+  min-width: 0;
+}
+.agent-tool-content img {
+  max-height: 240px;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 7px;
+}
+.agent-scroll-bottom {
+  position: absolute;
+  right: 14px;
+  bottom: 8px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--popover);
+  box-shadow: 0 2px 6px #0001;
+  cursor: pointer;
+}
+.agent-floating :focus-visible,
+.agent-menu-layer :focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+@media (max-width: 600px) {
+  .agent-launcher {
+    right: 14px;
+    bottom: 16px;
+  }
+  .agent-model-trigger {
+    max-width: 115px;
+    padding: 0 4px;
+  }
+  .agent-composer {
+    margin: 7px 10px 15px;
+  }
+  .agent-floating {
+    border-radius: 14px;
+  }
+}

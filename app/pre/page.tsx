@@ -1,2 +1,2 @@
-import { Playbook } from "@/components/pre/playbook";
-export default function Page() { return <Playbook/>; }
+import { redirect } from "next/navigation";
+export default function Page() { redirect("/"); }

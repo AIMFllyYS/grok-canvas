@@ -24,7 +24,6 @@ auth.*.json
 *.md
 !README.md
 !README.en.md
-!docs/aigc-workstation.md
 /.agents/
 /.impeccable/
 /.github/
