@@ -34,3 +34,8 @@ start.cmd
 
 # Local QA media, screenshots and account-specific evidence are not release assets.
 /artifacts/
+
+# 本地临时工作区：临时文件、日志、草稿、调试产物。整个目录不进入 Git。
+/tmp/
+# 本地临时脚本（不进入仓库的一次性脚本放这里；仓库正式脚本仍在 scripts/ 中）。
+/scripts/local/
