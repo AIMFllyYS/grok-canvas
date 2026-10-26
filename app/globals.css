@@ -184,6 +184,31 @@
     }
 }
 
+/* 统一圆角契约：画布上的紧凑浮动条用胶囊形，浮层面板用 16px 大圆角。
+   与底部工具栏（胶囊）和右侧素材库面板（16px）保持同一套弧度。 */
+html:root {
+  --ui-chip-radius: 999px;
+  --ui-surface-radius: 16px;
+}
+
+/* 项目标识：浅色模式用浅色底，深色模式用深色底，节点配色随底色微调以保证可读性。 */
+html:root {
+  --mark-tile: #ffffff;
+  --mark-ring: #dcdcd6;
+  --mark-line: #c4c4bd;
+  --mark-node-a: #6f9a6f;
+  --mark-node-b: #b9a87e;
+  --mark-node-c: #9a9aa2;
+}
+html.dark {
+  --mark-tile: #232323;
+  --mark-ring: #454540;
+  --mark-line: #6b6b66;
+  --mark-node-a: #8fb08a;
+  --mark-node-b: #f7f2e4;
+  --mark-node-c: #a7a7b0;
+}
+
 /* Approved production interaction states. */
 html:root {
   --ui-hover: #eeeeee;

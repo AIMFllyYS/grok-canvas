@@ -36,7 +36,8 @@ export function CanvasSwitcher({
     : canvases;
 
   return (
-    <div className="flex min-w-0 max-w-[40%] items-center gap-0.5">
+    // 宽度上限由顶栏（page.tsx）统一控制，这里只负责在可用宽度里收缩。
+    <div className="flex min-w-0 items-center gap-0.5">
       {editing ? (
         <input
           autoFocus

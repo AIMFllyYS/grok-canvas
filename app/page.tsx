@@ -9,6 +9,7 @@ import { CanvasSwitcher } from "@/components/canvas-switcher";
 import { FlowCanvas } from "@/components/canvas/flow-canvas";
 import { DesktopWorkspace } from "@/components/desktop-workspace";
 import { StatusFeedback } from "@/components/ui/status-feedback";
+import { ProjectMark } from "@/components/ui/project-mark";
 import type { ImageNodeData } from "@/components/canvas/image-node";
 import type { CanvasDoc, CanvasSummary } from "@/lib/canvas-store";
 import { normalizeNodeResults, parseGenerationCount } from "@/lib/multi-image";
@@ -224,19 +225,24 @@ function Workspace() {
 
   return (
     <div className="fixed inset-0 flex flex-col overflow-hidden">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b px-4" inert={agentBusy}>
-        {doc ? (
-          <CanvasSwitcher
-            doc={doc}
-            canvases={canvases}
-            onSwitch={(id) => void transition(() => switchCanvas(id))}
-            onCreate={() => void transition(createCanvas)}
-            onDelete={(id) => void transition(() => deleteCanvasById(id))}
-            onRename={renameCanvas}
-          />
-        ) : (
-          <span className="text-sm font-medium">grok-canvas</span>
-        )}
+      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4" inert={agentBusy}>
+        {/* 名称区约占顶栏 1/4 宽；上限放在顶栏这一层，百分比才按顶栏宽度算，
+            放进里面的子元素会让 max-w 相对收缩成很小的值，长名字只剩两三个字。 */}
+        <div className="flex min-w-0 max-w-[25%] items-center gap-2.5">
+          <ProjectMark size={22} className="shrink-0" />
+          {doc ? (
+            <CanvasSwitcher
+              doc={doc}
+              canvases={canvases}
+              onSwitch={(id) => void transition(() => switchCanvas(id))}
+              onCreate={() => void transition(createCanvas)}
+              onDelete={(id) => void transition(() => deleteCanvasById(id))}
+              onRename={renameCanvas}
+            />
+          ) : (
+            <span className="truncate text-sm font-medium">grok-canvas</span>
+          )}
+        </div>
         <AuthWidget />
       </header>
       {saveError ? (

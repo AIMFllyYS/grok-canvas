@@ -7,7 +7,7 @@
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--ui-surface-radius, 16px);
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow:
@@ -85,19 +85,20 @@
   touch-action: none;
   color: var(--muted-foreground);
 }
+/* 画布左下角的启动器：与底部菜单同为胶囊形，圆角取自统一的 --ui-chip-radius。 */
 .agent-launcher {
   position: fixed;
   bottom: 22px;
-  right: 22px;
+  left: 22px;
   z-index: 45;
   display: flex;
   align-items: center;
   gap: 7px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--ui-chip-radius, 999px);
   background: var(--popover);
   color: var(--foreground);
-  padding: 10px 13px;
+  padding: 10px 16px;
   font-size: 12px;
   box-shadow: 0 4px 16px #0002;
   cursor: pointer;
@@ -108,6 +109,10 @@
   border-radius: 50%;
   background: currentColor;
   animation: pulse 1s infinite;
+}
+/* 拆散布局下工具栏同样停在左下角，启动器上移让开，避免两个控件叠在一起。 */
+html[data-toolbar-layout="scattered"] .agent-launcher {
+  bottom: 64px;
 }
 .canvas-agent {
   display: flex;
@@ -723,7 +728,7 @@
 }
 @media (max-width: 600px) {
   .agent-launcher {
-    right: 14px;
+    left: 14px;
     bottom: 16px;
   }
   .agent-model-trigger {
@@ -732,8 +737,5 @@
   }
   .agent-composer {
     margin: 7px 10px 15px;
-  }
-  .agent-floating {
-    border-radius: 14px;
   }
 }

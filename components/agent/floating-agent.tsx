@@ -16,6 +16,16 @@ import {
 import { AgentGlyph } from "@/components/agent/icons";
 import { WorkButton } from "./primitives";
 type Rect = { x: number; y: number; width: number; height: number };
+// 位置偏好键带版本号：默认位置从右下角改到左下角后，旧键里的右侧坐标不再复用。
+const PANEL_STORAGE_KEY = "grok-agent-panel:v2";
+const PANEL_DEFAULT = { width: 432, height: 640, offset: 22 };
+/** 默认展开在画布左下角，与左下角的启动器对齐。 */
+function defaultRect(): Rect {
+  const w = PANEL_DEFAULT.width,
+    h = PANEL_DEFAULT.height,
+    o = PANEL_DEFAULT.offset;
+  return { x: o, y: Math.max(o, window.innerHeight - h - o), width: w, height: h };
+}
 function fit(rect: Rect): Rect {
   const w = Math.min(
       window.innerWidth,
@@ -62,21 +72,12 @@ export function FloatingAgent({
   useEffect(() => {
     let saved: Rect | undefined;
     try {
-      saved = JSON.parse(localStorage.getItem("grok-agent-panel") ?? "null");
+      saved = JSON.parse(localStorage.getItem(PANEL_STORAGE_KEY) ?? "null");
     } catch {}
     const valid =
       saved &&
       [saved.x, saved.y, saved.width, saved.height].every(Number.isFinite);
-    place(
-      valid
-        ? saved!
-        : {
-            x: window.innerWidth - 456,
-            y: window.innerHeight - 680,
-            width: 432,
-            height: 640,
-          },
-    );
+    place(valid ? saved! : defaultRect());
     const resize = () => {
       if (current.current) place(current.current);
     };
@@ -90,7 +91,10 @@ export function FloatingAgent({
   const finish = () => {
     drag.current = null;
     try {
-      localStorage.setItem("grok-agent-panel", JSON.stringify(current.current));
+      localStorage.setItem(
+        PANEL_STORAGE_KEY,
+        JSON.stringify(current.current),
+      );
     } catch {}
   };
   const pointer = (resize: boolean) => ({

@@ -19,6 +19,8 @@ export function WorkspacePreferencesProvider({ children }: { children: ReactNode
     try { localStorage.setItem(TOOLBAR_LAYOUT_KEY, next); } catch { /* 不阻断本次操作。 */ }
   }, []);
   const resetPosition = useCallback(() => setPositionReset(n => n + 1), []);
+  // 让样式层知道工具栏布局：拆散布局的工具栏也贴左下角，创作 Agent 启动器需要让位。
+  useEffect(() => { document.documentElement.dataset.toolbarLayout = layout; }, [layout]);
   const value = useMemo(() => ({ layout, setLayout, positionReset, resetPosition }), [layout, setLayout, positionReset, resetPosition]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
