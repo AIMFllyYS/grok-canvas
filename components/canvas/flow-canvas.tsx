@@ -106,9 +106,12 @@ import {
   type ImageNodeData,
 } from "./image-node";
 import { defaultVideoNodeData, VideoNode, type VideoFlowNode, type VideoNodeData } from "./video-node";
+import { TextNode } from "./text-node";
+import { placeNewNode } from "@/lib/node-placement";
+import { isPromptNode, resolveNodePrompt } from "@/lib/prompt-nodes";
 import { WorkflowNode } from "./workflow-node";
 
-const nodeTypes = { image: ImageNode, asset: AssetNode, video: VideoNode, workflow: WorkflowNode };
+const nodeTypes = { image: ImageNode, asset: AssetNode, video: VideoNode, workflow: WorkflowNode, text: TextNode, prompt: TextNode };
 const edgeTypes = { scissor: ScissorEdge };
 
 function videoEdgeRole(edge: Edge): VideoInputRole {
@@ -119,7 +122,7 @@ function videoOccupancy(nodeId: string, nodes: Node[], edges: Edge[]): Array<{ r
   const node = nodes.find((item) => item.id === nodeId);
   const uploads = ((node?.data as VideoNodeData | undefined)?.uploadInputs) ?? [];
   return [
-    ...edges.filter((edge) => edge.target === nodeId&&!isWorkflowControlEdge(edge)).map((edge) => ({ role: videoEdgeRole(edge) })),
+    ...edges.filter((edge) => edge.target === nodeId&&!isWorkflowControlEdge(edge) && !edge.data?.promptInput).map((edge) => ({ role: videoEdgeRole(edge) })),
     ...uploads,
   ];
 }
@@ -600,7 +603,7 @@ export function FlowCanvas({
   const attachmentCountOf = useCallback((nodeId: string): number => {
     const node = latestRef.current.nodes.find((item) => item.id === nodeId);
     const uploads = (node?.data.uploadAttachments as string[] | undefined) ?? [];
-    const incoming = latestRef.current.edges.filter((edge) => edge.target === nodeId&&!isWorkflowControlEdge(edge)).length;
+    const incoming = latestRef.current.edges.filter((edge) => edge.target === nodeId&&!isWorkflowControlEdge(edge) && !edge.data?.promptInput).length;
     return uploads.length + incoming;
   }, []);
 
@@ -615,6 +618,7 @@ export function FlowCanvas({
     if (latestRef.current.edges.some((edge) => edge.target === target && edge.source === source)) {
       return false;
     }
+    if (isPromptNode(sourceNode)) return targetNode?.type === "image" || targetNode?.type === "video";
     if (targetNode?.type === "video") {
       if (sourceNode?.type !== "image" && sourceNode?.type !== "asset") {
         return false;
@@ -624,11 +628,12 @@ export function FlowCanvas({
     if (targetNode?.type !== "image") {
       return false;
     }
-    return attachmentCountOf(target) < ATTACHMENT_MAX;
+    return (sourceNode?.type === "image" || sourceNode?.type === "asset") && attachmentCountOf(target) < ATTACHMENT_MAX;
   }, [attachmentCountOf]);
 
   const connectEdge = useCallback((connection: Connection): Edge => {
     const targetNode = latestRef.current.nodes.find((node) => node.id === connection.target);
+    if (isPromptNode(latestRef.current.nodes.find(n => n.id === connection.source))) return { ...connection, id: crypto.randomUUID(), type: "scissor", data: { promptInput: true } };
     if (targetNode?.type === "video" && connection.target) {
       return {
         ...connection,
@@ -715,7 +720,7 @@ export function FlowCanvas({
       const node: ImageFlowNode = {
         id,
         type: "image",
-        position: at,
+        position: placeNewNode(at, latestRef.current.nodes),
         selected: true,
         data: defaultImageNodeData("图片"),
       };
@@ -735,7 +740,7 @@ export function FlowCanvas({
       const node: VideoFlowNode = {
         id,
         type: "video",
-        position: at,
+        position: placeNewNode(at, latestRef.current.nodes),
         selected: true,
         data: defaultVideoNodeData("视频"),
       };
@@ -748,12 +753,18 @@ export function FlowCanvas({
     [setNodes],
   );
 
+  const addTextNode = useCallback((at: {x:number;y:number}, type: "text" | "prompt"): Node => {
+    const node: Node = {id:crypto.randomUUID(),type,position:placeNewNode(at, latestRef.current.nodes),selected:true,data:{name:type === "prompt" ? "提示词参数" : "文本笔记",text:""}};
+    const next = [...latestRef.current.nodes.map(n=>({...n,selected:false})),node];
+    latestRef.current={...latestRef.current,nodes:next};setNodes(next);return node;
+  },[setNodes]);
+
   const addAssetNode = useCallback(
     (at: { x: number; y: number }, assetName: string, name: string): Node => {
       const node: Node = {
         id: crypto.randomUUID(),
         type: "asset",
-        position: at,
+        position: placeNewNode(at, latestRef.current.nodes),
         data: { name, assetName },
       };
       const next = [...latestRef.current.nodes, node];
@@ -871,7 +882,7 @@ export function FlowCanvas({
       } else if (overrides?.retry) {
         retry = node.data.generationRequest as ImageNodeData["generationRequest"];
       }
-      const prompt = String(retry?.prompt ?? overrides?.prompt ?? node.data.prompt ?? "").trim();
+      const prompt = retry?.prompt ?? resolveNodePrompt(nodeId, String(overrides?.prompt ?? node.data.prompt ?? ""), latestRef.current.nodes, latestRef.current.edges);
       const aspectRatio = retry?.aspectRatio ?? overrides?.aspectRatio ?? (node.data.aspectRatio as string);
       const resolution = retry?.resolution ?? overrides?.resolution ?? (node.data.resolution as "1k" | "2k");
       const quality = retry?.quality ?? overrides?.quality ?? (node.data.quality as "low" | "medium");
@@ -987,7 +998,7 @@ export function FlowCanvas({
         return;
       }
       const retryRequest = overrides?.retry ? data.generationRequest : undefined;
-      const prompt = String(retryRequest?.prompt ?? overrides?.prompt ?? data.draftPrompt ?? data.prompt ?? "").trim();
+      const prompt = retryRequest?.prompt ?? resolveNodePrompt(nodeId, String(overrides?.prompt ?? data.draftPrompt ?? data.prompt ?? ""), latestRef.current.nodes, latestRef.current.edges);
       if (!prompt) return;
       if (loginRequired(loggedIn)) {
         toast.error(LOGIN_REQUIRED_MESSAGE);
@@ -1594,7 +1605,7 @@ export function FlowCanvas({
           minZoom={0.1}
           maxZoom={2}
           {...interactionConfig(mode)}
-          colorMode={resolvedTheme === "light" ? "light" : "dark"}
+          colorMode={resolvedTheme === "dark" ? "dark" : "light"}
           onConnectStart={() => setDragging(true)}
           onMoveStart={() => setDragging(true)}
           panActivationKeyCode="Space"
@@ -1676,6 +1687,8 @@ export function FlowCanvas({
                   setMenu(null);
                 }}
               />
+                <MenuButton label="添加文本节点" onClick={()=>{pushAdd([addTextNode(viewportCenter(),"text")],[]);setMenu(null);}}/>
+                <MenuButton label="添加提示词参数节点" onClick={()=>{pushAdd([addTextNode(viewportCenter(),"prompt")],[]);setMenu(null);}}/>
               <div className="mx-1 my-2 border-t" />
               <MenuButton
                 label="上传图片"
@@ -1691,7 +1704,7 @@ export function FlowCanvas({
 
         <CanvasToolbar canvasId={doc.id} containerRef={wrapperRef} mode={mode} onModeChange={next => { setMode(next); setMenu(null); }}
           minimapOpen={minimapOpen} onToggleMinimap={() => setMinimapOpen(open => !open)}
-          onAddImage={() => { setMode("select"); pushAdd([addImageNode(viewportCenter())], []); }} onAddVideo={() => { setMode("select"); pushAdd([addVideoNode(viewportCenter())], []); }} onDraggingChange={setDragging} />
+          onAddText={type => {setMode("select");pushAdd([addTextNode(viewportCenter(),type)],[]);}} onAddImage={() => { setMode("select"); pushAdd([addImageNode(viewportCenter())], []); }} onAddVideo={() => { setMode("select"); pushAdd([addVideoNode(viewportCenter())], []); }} onDraggingChange={setDragging} />
         <AssetLibrary canvasName={doc.name} target={nodes.find(node => node.id === panelNodeId)} blocked={dragging || Boolean(picker)} uploading={uploading} onUpload={() => openLibraryUpload()}
           onPlace={asset => { setMode("select"); pushAdd([addAssetNode(viewportCenter(), asset.assetName, asset.name)], []); }} />
         {picker && pickerNode && <ReferencePicker key={`${picker.nodeId}:${picker.role}:${Boolean(picker.onSelect)}`} node={pickerNode} options={picker} bound={pickerBound} uploading={uploading}
@@ -1738,6 +1751,8 @@ export function FlowCanvas({
                     setMenu(null);
                   }}
                 />
+                <MenuButton label="添加文本节点" onClick={()=>{pushAdd([addTextNode(menu.flow,"text")],[]);setMenu(null);}}/>
+                <MenuButton label="添加提示词参数节点" onClick={()=>{pushAdd([addTextNode(menu.flow,"prompt")],[]);setMenu(null);}}/>
                 <div className="mx-1 my-2 border-t" />
                 <MenuButton
                   label="上传图片"

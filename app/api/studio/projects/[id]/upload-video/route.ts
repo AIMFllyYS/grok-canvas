@@ -9,6 +9,7 @@ import {
 } from "@/lib/studio/store";
 import { runFfmpeg } from "@/lib/studio/export";
 import { studioError } from "@/lib/studio/http";
+import { syncProjectCanvas } from "@/lib/studio/canvas";
 import type { Source } from "@/lib/studio/schema";
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -75,6 +76,7 @@ export async function POST(
     const project = await updateProject(id, (p) => {
       p.sources.push(source);
     });
+    await syncProjectCanvas(project);
     return Response.json({ project, source });
   } catch (error) {
     return studioError(error);

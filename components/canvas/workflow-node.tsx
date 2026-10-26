@@ -1,6 +1,8 @@
 "use client";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { FileText, Film, Library } from "lucide-react";
+import { FileChip, WorkButton } from "@/components/pre/primitives";
+import { MessageResponse } from "@/components/ai-elements/message";
 type WorkflowData = {
   name: string;
   text: string;
@@ -24,13 +26,11 @@ export function WorkflowNode({
       <div className="studio-eyebrow">
         <Icon size={14} /> {data.stage.toUpperCase()}
       </div>
-      <h3>{data.name}</h3>
-      <p>{data.text}</p>
-      <span>
-        {data.count} {data.stage === "source" ? "份素材" : "个镜头"}
-      </span>
+      <FileChip name={data.name} kind="text"/>
+      <div className="pre-workflow-body nodrag nopan nowheel"><MessageResponse mode="static">{data.text}</MessageResponse></div>
+      <footer><span>{data.count} {data.stage === "source" ? "份素材" : "个镜头"}</span></footer>
       {data.assetName && (
-        <a className="nodrag" href={`/api/assets/${data.assetName}`} download>
+        <a className="pre-button pre-button-secondary nodrag" href={`/api/assets/${data.assetName}`} download>
           {data.stage === "assembly" ? "下载成片" : "查看素材"}
         </a>
       )}

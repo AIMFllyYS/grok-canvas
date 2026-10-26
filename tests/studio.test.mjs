@@ -401,6 +401,7 @@ test("autonomous batch reports each stage, preserves existing work and continues
   try {
     const p = {
       script: "existing script",
+      scriptApproval: { version: 0, approvedAt: "2026-10-26T00:00:00Z" },
       references: Array.from({ length: 20 }, (_, i) => ({ id: `R${i}` })),
       shots: [
         { id: "P01", refs: ["R0"] },

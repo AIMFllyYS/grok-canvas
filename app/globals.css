@@ -3,6 +3,7 @@
 @import "shadcn/tailwind.css";
 @import "./studio.css";
 @import "./studio-minimal.css";
+@import "./workstation.css";
 
 @custom-variant dark (&:is(.dark *));
 

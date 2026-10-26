@@ -12,7 +12,7 @@ import {
   Play,
   RefreshCw,
   Save,
-  Sparkles,
+  Clapperboard,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -27,6 +27,9 @@ import {
 import type { ActionInput, ProductionAction } from "@/lib/studio/production";
 import { ShotEditor } from "./shot-editor";
 import { ResizeGrip } from "./edge-panel";
+import { ScriptReview } from "@/components/pre/script-review";
+import { FileChip } from "@/components/pre/primitives";
+import { MediaPreview } from "@/components/pre/media-preview";
 
 export type DeskProps = {
   project: StudioProject;
@@ -58,7 +61,7 @@ export function DirectorDesk(props: DeskProps) {
   useEffect(() => {
     if (p.shots.length && !selected) {
       setSelected(p.shots[0]!.id);
-      setTab("shots");
+      setTab("script");
     }
   }, [p.shots, selected]);
   const shots = timeline(p.shots),
@@ -92,7 +95,7 @@ export function DirectorDesk(props: DeskProps) {
             </div>
           </div>
           {p.script ? (
-            <MessageResponse mode="static">{p.script}</MessageResponse>
+            <ScriptReview project={p} busy={busy} onSave={onPatch} onApprove={async () => { await onPatch({ approveScript: true }); setTab("refs"); await onBatch("reference"); }}/>
           ) : (
             <EmptyState
               title="暂无剧本"
@@ -123,7 +126,7 @@ export function DirectorDesk(props: DeskProps) {
               <article className="studio-reference-card" key={ref.id}>
                 <div className="studio-reference-image">
                   {ref.assetName ? (
-                    <img src={`/api/assets/${ref.assetName}`} alt={ref.name} />
+                    <MediaPreview assetName={ref.assetName} name={ref.name}/>
                   ) : (
                     <>
                       <ImagePlus size={25} />
@@ -152,7 +155,7 @@ export function DirectorDesk(props: DeskProps) {
                     <MessageResponse mode="static">
                       {ref.prompt.zh}
                     </MessageResponse>
-                    <pre>{ref.prompt.en}</pre>
+                    <MessageResponse mode="static">{ref.prompt.en}</MessageResponse>
                   </details>
                   <div className="studio-card-actions">
                     <button
@@ -459,6 +462,7 @@ function BriefEditor({
         <label>
           作品名称
           <input
+            aria-label="作品名称"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={160}
@@ -467,6 +471,7 @@ function BriefEditor({
         <label>
           创作简报
           <textarea
+            aria-label="创作简报"
             className="studio-brief-textarea"
             placeholder="故事是什么？希望观众看完有什么感受？也可以直接粘贴原始素材…"
             value={brief}
@@ -477,6 +482,7 @@ function BriefEditor({
           <label>
             画面比例
             <select
+              aria-label="画面比例"
               value={aspect}
               onChange={(e) => setAspect(e.target.value as typeof aspect)}
             >
@@ -488,6 +494,7 @@ function BriefEditor({
           <label>
             目标时长（秒）
             <input
+              aria-label="目标时长（秒）"
               type="number"
               min="6"
               max="600"
@@ -551,9 +558,9 @@ function BriefEditor({
             {pending.startsWith("script") ? (
               <LoaderCircle size={15} className="animate-spin" />
             ) : (
-              <Sparkles size={15} />
+              <Clapperboard size={15} />
             )}{" "}
-            {p.script ? "更新导演脚本" : "生成导演脚本"}
+            {pending.startsWith("script") ? "正在生成脚本…" : p.script ? "更新导演脚本" : "生成导演脚本"}
           </button>
         </div>
       </div>

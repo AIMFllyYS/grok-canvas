@@ -88,12 +88,28 @@ export type StudioProject = {
   shots: Shot[];
   sources: Source[];
   messages: import("ai").UIMessage[];
+  conversations?: StudioConversation[];
+  activeConversationId?: string;
+  scriptVersion?: number;
+  scriptApproval?: { version: number; approvedAt: string };
   events: StudioEvent[];
   createdAt: string;
   updatedAt: string;
   exportAsset?: string;
   exportSignature?: string;
 };
+export type AgentSettings = { model?: string; fast?: boolean; contextWindow?: number; effort?: string };
+export type StudioConversation = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: import("ai").UIMessage[];
+  settings: AgentSettings;
+};
+export function isScriptApproved(p: Pick<StudioProject, "script" | "scriptVersion" | "scriptApproval">) {
+  return !!p.script && !!p.scriptApproval && p.scriptApproval.version === (p.scriptVersion ?? 0);
+}
 export type StudioSummary = Pick<
   StudioProject,
   "id" | "title" | "updatedAt" | "canvasId"

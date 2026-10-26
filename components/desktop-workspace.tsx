@@ -14,10 +14,9 @@ export function DesktopWorkspace({ children }: { children: React.ReactNode }) {
   const [opened, setOpened] = useState(false);
   const [checked, setChecked] = useState(false);
   useEffect(() => {
-    const media = window.matchMedia("(min-width: 1100px) and (min-height: 640px)");
+    const media = window.matchMedia("(min-width: 320px) and (min-height: 360px)");
     const update = () => {
-      const mobile = /Android|iPhone|iPod|Mobile/i.test(navigator.userAgent);
-      const next = media.matches && !mobile;
+      const next = media.matches;
       setAvailable(next);
       if (next) setOpened(true);
       setChecked(true);
@@ -32,10 +31,9 @@ export function DesktopWorkspace({ children }: { children: React.ReactNode }) {
     </DesktopAvailableContext.Provider>}
     {!available && <main className="desktop-required">
       <Monitor size={40} strokeWidth={1.5} aria-hidden="true" />
-      <h1>{checked ? "在电脑上继续创作" : "正在准备画布…"}</h1>
+      <h1>{checked ? "请稍微放大窗口" : "正在准备画布…"}</h1>
       {checked && <>
-        <p>画布需要鼠标和键盘操作，请在电脑浏览器打开当前网址。</p>
-        <p>已经在用电脑？请放大窗口，为画布留出至少 1100 × 640 的空间。</p>
+        <p>为画布保留至少 320 × 360 的空间。窄屏也可以通过创作 Agent 操作工作流。</p>
         {opened && <p role="status">当前画布仍保留，放大窗口即可继续。</p>}
       </>}
     </main>}

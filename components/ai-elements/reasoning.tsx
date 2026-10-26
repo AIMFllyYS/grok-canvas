@@ -1,6 +1,7 @@
 "use client";
 import { Collapsible } from "@base-ui/react/collapsible";
-import { Brain, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
+import { ReasoningGlyph } from "@/components/studio/studio-icons";
 import { MessageResponse } from "./message";
 export function Reasoning({
   text,
@@ -12,7 +13,7 @@ export function Reasoning({
   return (
     <Collapsible.Root className="studio-reasoning" defaultOpen={false}>
       <Collapsible.Trigger>
-        <Brain size={14} />
+        <ReasoningGlyph size={14} />
         {streaming ? "正在思考" : "模型推理摘要"}
         <ChevronDown size={13} />
       </Collapsible.Trigger>

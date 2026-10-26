@@ -48,10 +48,13 @@ export function StudioMark({ size = 30, ...props }: IconProps) {
 export function AgentGlyph(props: IconProps) {
   return (
     <Glyph {...props}>
-      <path d="M12 3.5L14.4 9.6L20.5 12L14.4 14.4L12 20.5L9.6 14.4L3.5 12L9.6 9.6L12 3.5Z" />
-      <path d="M19 3.5V6.5M17.5 5H20.5" />
+      <path d="M7 4H17L21 12L17 20H7L3 12L7 4Z" />
+      <path d="M8 8L5.5 12L8 16M16 8L18.5 12L16 16M13.5 8L10.5 16" />
     </Glyph>
   );
+}
+export function ReasoningGlyph(props: IconProps) {
+  return <Glyph {...props}><circle cx="5" cy="5" r="2"/><circle cx="19" cy="19" r="2"/><path d="M5 7V15C5 17 7 19 9 19H17M7 5H15C17 5 19 7 19 9V11M10 12H14M12 10V14"/></Glyph>;
 }
 export function DirectorGlyph(props: IconProps) {
   return (

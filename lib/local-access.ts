@@ -1,7 +1,9 @@
 /** The app is a single-user loopback service, never a public API. */
 export function allowLocalRequest(headers: Headers, pathname: string): boolean {
   const host = headers.get("host");
-  if (host !== "127.0.0.1:3210" && host !== "localhost:3210") return false;
+  const configured = process.env.GROK_CANVAS_PORT ?? "3210";
+  const port = /^\d{1,5}$/.test(configured) && Number(configured) > 0 && Number(configured) <= 65535 ? configured : "3210";
+  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return false;
 
   // OAuth returns from xAI as a cross-site navigation; its handler validates state + PKCE.
   if (pathname === "/callback" || pathname === "/auth-result") return true;

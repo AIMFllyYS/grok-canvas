@@ -10,6 +10,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ParameterView } from "@/components/pre/parameter-view";
+import { ApprovalCard } from "@/components/pre/primitives";
 const names: Record<string, string> = {
   read_project: "读取导演台",
   save_creative_brief: "保存创作简报",
@@ -24,18 +26,23 @@ const names: Record<string, string> = {
   check_video_tasks: "查询视频任务",
   review_shot: "记录镜头验收",
   export_film: "合成完整视频",
+  approve_director_script: "确认导演脚本",
+  read_canvas: "读取画布",
+  add_canvas_nodes: "搭建画布节点",
+  edit_canvas_nodes: "编辑画布与连线",
 };
-export function Tool({ part }: { part: ToolUIPart }) {
+export function Tool({ part, onApproval }: { part: ToolUIPart; onApproval?: (decision: { id: string; approved: boolean; reason?: string }) => void }) {
   const running =
     part.state === "input-streaming" ||
     part.state === "input-available" ||
     (part.state === "output-available" && part.preliminary === true);
   const failed =
     part.state === "output-error" || part.state === "output-denied";
-  const [open, setOpen] = useState(running);
+  const approval = part.state === "approval-requested";
+  const [open, setOpen] = useState(running || approval || failed);
   useEffect(() => {
-    setOpen(running);
-  }, [running]);
+    setOpen(running || approval || failed);
+  }, [running, approval, failed]);
   const name = part.type.slice(5),
     output = part.state === "output-available" ? part.output : undefined;
   const result = output as
@@ -67,14 +74,16 @@ export function Tool({ part }: { part: ToolUIPart }) {
           ) : (
             <CheckCircle2 size={13} />
           )}{" "}
-          {running ? "进行中" : failed ? "失败" : "已完成"}
+          {approval ? "等待批准" : part.state === "approval-responded" ? "已提交决定" : running ? "进行中" : failed ? "未完成" : "已完成"}
         </span>
         <ChevronDown size={14} className={open ? "rotate-180" : ""} />
       </Collapsible.Trigger>
       <Collapsible.Panel className="studio-tool-content">
         <div className="studio-eyebrow">工具参数</div>
-        <pre>{JSON.stringify(part.input ?? {}, null, 2)}</pre>
-        {part.state === "output-error" && <p role="alert">{part.errorText}</p>}
+        <ParameterView value={part.input ?? {}}/>
+        {part.state === "output-error" && <div role="alert"><ParameterView value={part.errorText}/></div>}
+        {part.state === "output-denied" && <p>本次执行未获批准，未提交生成。</p>}
+        {part.state === "approval-requested" && <ApprovalCard approved={false} disabled={!onApproval} onApprove={() => onApproval?.({ id: part.approval.id, approved: true })} onReject={() => onApproval?.({ id: part.approval.id, approved: false, reason: "继续修改脚本，暂不开始制作" })}>请先在导演台审阅当前脚本。批准绑定本次脚本版本，修改后需重新确认。</ApprovalCard>}
         {output !== undefined && (
           <>
             <div className="studio-eyebrow">执行结果</div>
@@ -96,12 +105,12 @@ export function Tool({ part }: { part: ToolUIPart }) {
                 ))}
               </div>
             ) : result?.analysis ? (
-              <p className="studio-analysis-result">{result.analysis}</p>
+              <ParameterView value={result.analysis}/>
             ) : result?.assetName &&
               /\.(png|jpe?g|webp)$/i.test(result.assetName) ? (
               <img src={`/api/assets/${result.assetName}`} alt="工具生成结果" />
             ) : (
-              <pre>{JSON.stringify(output, null, 2).slice(0, 18000)}</pre>
+              <ParameterView value={output}/>
             )}
           </>
         )}

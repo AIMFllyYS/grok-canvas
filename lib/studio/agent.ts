@@ -2,9 +2,16 @@ import { ToolLoopAgent, isStepCount, tool } from "ai";
 import { z } from "zod";
 import { loadProject, updateProject } from "./store";
 import { analyzeAsset, produce, searchProject } from "./production";
-import { studioModel } from "./model";
+import { studioModel, studioProviderOptions } from "./model";
 import { AGENT_RULES } from "./prompts";
 import { runProductionBatch } from "./batch";
+import type { AgentSettings } from "./schema";
+import { isScriptApproved } from "./schema";
+import { compactDirectorContext } from "./context";
+import { loadCanvas, saveCanvas } from "../canvas-store";
+import { StudioError } from "./store";
+import { editCanvasDocument } from "./canvas-edit";
+import { resolveCanvasReferences } from "../canvas-references";
 
 export async function searchImages(query: string) {
   const url = new URL("https://commons.wikimedia.org/w/api.php");
@@ -55,16 +62,79 @@ export async function searchImages(query: string) {
 export async function createDirectorAgent(
   projectId: string,
   signal?: AbortSignal,
+  settings: AgentSettings = {},
 ) {
+  const model = await studioModel(settings);
   return new ToolLoopAgent({
     id: "grok-canvas-director",
-    model: await studioModel(),
+    model,
     instructions: AGENT_RULES + `\n当前项目ID：${projectId}`,
     stopWhen: isStepCount(18),
     maxOutputTokens: 10000,
     maxRetries: 0,
     toolCallConcurrency: 1,
-    tools: {
+    prepareStep: async ({ messages }) => ({ messages: await compactDirectorContext(messages, model, settings.contextWindow, signal) }),
+    providerOptions: studioProviderOptions(settings),
+    toolApproval: { approve_director_script: { type: "user-approval", reason: "请审阅完整脚本与分镜计划，批准后才会开始生成参考图。" } },
+    tools: createDirectorTools(projectId, signal),
+  });
+}
+
+/** Tool schemas are available before authentication, so failed model requests still save validated history. */
+export function createDirectorTools(projectId: string, signal?: AbortSignal) {
+  return {
+      approve_director_script: tool({
+        description: "提交脚本供人类确认批准。先 read_project 获取 scriptVersion，等待界面批准后才继续生成；每次修改必须重新批准。",
+        inputSchema: z.object({ scriptVersion: z.number().int().nonnegative() }),
+        execute: async ({ scriptVersion }) => {
+          await updateProject(projectId, p => {
+            if (!p.script || (p.scriptVersion ?? 0) !== scriptVersion) throw new StudioError("脚本已修改，请重新审阅最新版本", 409);
+            p.scriptApproval = { version: scriptVersion, approvedAt: new Date().toISOString() };
+          });
+          return { approved: true, scriptVersion };
+        },
+      }),
+      read_canvas: tool({
+        description: "读取当前项目的画布节点和连线；节点使用共享组件渲染。",
+        inputSchema: z.object({}),
+        execute: async () => { const p = await loadProject(projectId); return loadCanvas(p.canvasId); },
+      }),
+      edit_canvas_nodes: tool({
+        description: "编辑当前画布的自建节点名称、文本、提示词和位置，连接/断开参数或图片参考，或删除用户明确要求删除的节点。导演台管理节点需用对应制作工具修改。先 read_canvas 获取 ID。",
+        inputSchema: z.object({
+          updates: z.array(z.object({ id:z.string(),name:z.string().max(160).optional(),text:z.string().max(12000).optional(),prompt:z.string().max(12000).optional(),x:z.number().min(-50000).max(50000).optional(),y:z.number().min(-50000).max(50000).optional() })).max(30).default([]),
+          remove:z.array(z.string()).max(30).default([]),connect:z.array(z.object({source:z.string(),target:z.string(),role:z.enum(["first","last","reference"]).optional()})).max(40).default([]),disconnect:z.array(z.string()).max(40).default([]),
+        }),
+        execute: async edit => {
+          const p=await loadProject(projectId),canvas=await loadCanvas(p.canvasId);
+          if(!canvas)throw new StudioError("画布不存在",404);
+          const next=editCanvasDocument(canvas,edit),saved=await saveCanvas(next,canvas.revision);
+          if(!saved)throw new StudioError("画布已更新，请重新读取后操作",409);
+          return {updated:edit.updates.length,removed:edit.remove.length,connected:edit.connect.length,disconnected:edit.disconnect.length};
+        },
+      }),
+      add_canvas_nodes: tool({
+        description: "向当前画布添加文本、提示词参数、图片或视频节点并连接。使用共享节点组件；返回真实节点 ID，可由用户继续编辑和生成。",
+        inputSchema: z.object({ nodes: z.array(z.object({ key: z.string().min(1).max(60), type: z.enum(["text", "prompt", "image", "video"]), name: z.string().min(1).max(160), text: z.string().max(12000).default(""), x: z.number().min(-50000).max(50000), y: z.number().min(-50000).max(50000) })).min(1).max(20), edges: z.array(z.object({ source: z.string(), target: z.string() })).max(40).default([]) }),
+        execute: async ({ nodes, edges }) => {
+          const p = await loadProject(projectId), canvas = await loadCanvas(p.canvasId);
+          if (!canvas) throw new StudioError("画布不存在", 404);
+          const ids = new Map(nodes.map(n => [n.key, crypto.randomUUID()]));
+          if (ids.size !== nodes.length) throw new StudioError("节点 key 不可重复");
+          const added = nodes.map(n => ({ id: ids.get(n.key)!, type: n.type, position: { x: n.x, y: n.y }, data: { name: n.name, text: n.text, prompt: n.text, status: "idle", assetName: null, aspectRatio: "16:9", resolution: n.type === "video" ? "720p" : "1k", quality: "low", generationCount: 1, duration: 6, audio: false, uploadAttachments: [], uploadInputs: [] } }));
+          const links = edges.map(e => {
+            const source = added.find(n => n.id === ids.get(e.source)), target = added.find(n => n.id === ids.get(e.target));
+            if (!source || !target || source.id === target.id) throw new StudioError("连线端点无效");
+            if (!["image", "video"].includes(target.type)) throw new StudioError("参数连线目标必须是图片或视频节点");
+            if (!["text", "prompt", "image"].includes(source.type)) throw new StudioError("来源节点不能输出此参数");
+            return { id: crypto.randomUUID(), source: source.id, target: target.id, type: "scissor", data: ["text", "prompt"].includes(source.type) ? { promptInput: true } : target.type === "video" ? { role: "first" } : {} };
+          });
+          for (const node of added.filter(n => n.type === "image" || n.type === "video")) resolveCanvasReferences(node, added, links);
+          const saved = await saveCanvas({ ...canvas, nodes: [...canvas.nodes, ...added], edges: [...canvas.edges, ...links] }, canvas.revision);
+          if (!saved) throw new StudioError("画布已被其他页面更新，请重新读取后操作", 409);
+          return { nodes: added.map(n => ({ id: n.id, type: n.type, name: n.data.name })), edges: links.length };
+        },
+      }),
       read_project: tool({
         description:
           "读取当前导演台、脚本、参考库、分镜、已上传素材与制作状态。",
@@ -77,6 +147,9 @@ export async function createDirectorAgent(
           } = await loadProject(projectId);
           return {
             ...project,
+            conversations: undefined,
+            scriptApproved: isScriptApproved(project),
+            scriptVersion: project.scriptVersion ?? 0,
             script: project.script.slice(0, 24000),
             sources: project.sources.map((s) => ({
               ...s,
@@ -191,6 +264,5 @@ export async function createDirectorAgent(
         inputSchema: z.object({}),
         execute: () => produce(projectId, "export", {}, signal),
       }),
-    },
-  });
+  };
 }

@@ -7,7 +7,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  Bot,
   Check,
   ChevronRight,
   Clapperboard,
@@ -18,14 +17,15 @@ import {
   Layers,
   LoaderCircle,
   Plus,
-  Sparkles,
+  ListChecks,
+  RefreshCw,
   Square,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { AuthWidget } from "@/components/auth-widget";
 import { uploadAssets } from "@/lib/asset-upload";
-import type { Source, StudioProject, StudioSummary } from "@/lib/studio/schema";
+import type { Source, StudioProject, StudioSummary, AgentSettings } from "@/lib/studio/schema";
 import type { ActionInput, ProductionAction } from "@/lib/studio/production";
 import { AgentPanel } from "./agent-panel";
 import { DirectorDesk, type DeskView } from "./director-desk";
@@ -37,14 +37,18 @@ import {
   CanvasGlyph,
 } from "./studio-icons";
 import { WorkflowPreview } from "./workflow-preview";
+import { FloatingAgent } from "@/components/pre/floating-agent";
+import { UsageIndicator } from "@/components/usage-indicator";
+import { useAuth } from "@/components/auth-status";
 import { useTheme } from "next-themes";
 
-type Mode = "agent" | "director" | "canvas";
+type Mode = "director" | "canvas";
 type Props = {
   renderCanvas: (
     id: string,
     version: number,
     register: (prepare: () => Promise<boolean>) => void,
+    onCanvasChange: (id: string) => Promise<void>,
   ) => ReactNode;
 };
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -60,9 +64,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function StudioWorkspace({ renderCanvas }: Props) {
   const { theme, resolvedTheme } = useTheme();
+  const { loggedIn, status: authStatus } = useAuth();
+  const [refreshing, setRefreshing] = useState(false);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-  const [mode, setMode] = useState<Mode>("agent"),
+  const [mode, setMode] = useState<Mode>("canvas"),
     [project, setProject] = useState<StudioProject | null>(null),
     [projects, setProjects] = useState<StudioSummary[]>([]);
   const [loading, setLoading] = useState(true),
@@ -73,6 +79,8 @@ export function StudioWorkspace({ renderCanvas }: Props) {
     [canvasVersion, setCanvasVersion] = useState(0),
     [batch, setBatch] = useState(false);
   const [deskView, setDeskView] = useState<DeskView>("shots");
+  useEffect(() => { const close = () => setFloating(false); window.addEventListener("grok-canvas:library-open", close); return () => window.removeEventListener("grok-canvas:library-open", close); }, []);
+  useEffect(() => { if (floating) window.dispatchEvent(new Event("grok-canvas:agent-open")); }, [floating]);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null),
     projectRef = useRef(project),
@@ -156,8 +164,8 @@ export function StudioWorkspace({ renderCanvas }: Props) {
     )
       throw new Error("请先保存当前画布，再继续制作");
   };
-  const patch = async (fields: Record<string, unknown>) => {
-    await prepare();
+  const patch = async (fields: Record<string, unknown>, alreadyPrepared = false) => {
+    if (!alreadyPrepared) await prepare();
     const p = projectRef.current;
     if (!p) return;
     try {
@@ -194,6 +202,7 @@ export function StudioWorkspace({ renderCanvas }: Props) {
       );
       projectRef.current = data.project;
       setProject(data.project);
+      if (action === "script") setDeskView("script");
       setProjects((items) =>
         items.map((item) =>
           item.id === data.project.id
@@ -315,6 +324,7 @@ export function StudioWorkspace({ renderCanvas }: Props) {
     if (!project || busy) return;
     setPending("upload");
     try {
+      await prepare();
       for (const file of files) {
         let source: Source;
         if (/\.mp4$/i.test(file.name)) {
@@ -350,13 +360,14 @@ export function StudioWorkspace({ renderCanvas }: Props) {
             assetName: result.asset.name,
           };
         }
-        await patch({ source });
+        await patch({ source }, true);
       }
       toast.success("素材已加入导演台，可以让 Agent 分析整理");
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
       setPending("");
+      if (modeRef.current === "canvas") setCanvasVersion(v => v + 1);
     }
   };
   const runBatch = async (
@@ -407,18 +418,18 @@ export function StudioWorkspace({ renderCanvas }: Props) {
   };
   const beforeSend = async (text: string) => {
     await prepare();
-    if (!projectRef.current?.brief.trim()) await patch({ brief: text });
   };
   return (
     <div
       className="studio-app"
       data-mode={mode}
+      data-agent-open={floating}
       data-appearance={
         mounted
           ? theme === "system"
-            ? (resolvedTheme ?? "dark")
-            : (theme ?? "dark")
-          : "dark"
+            ? (resolvedTheme ?? "paper")
+            : (theme ?? "paper")
+          : "paper"
       }
     >
       <header className="studio-topbar">
@@ -428,12 +439,12 @@ export function StudioWorkspace({ renderCanvas }: Props) {
             Grok <span>Canvas</span>
           </strong>
         </div>
+        <UsageIndicator key={`${authStatus?.email}:${authStatus?.lastRefresh}`} active loggedIn={loggedIn === true} compact/>
         <nav className="studio-mode-switch" aria-label="工作台模式">
           {(
             [
-              ["agent", "Agent", AgentGlyph],
-              ["director", "导演台", DirectorGlyph],
-              ["canvas", "画布", CanvasGlyph],
+                            ["director", "导演台", DirectorGlyph],
+              ["canvas", "创作画布", CanvasGlyph],
             ] as const
           ).map(([id, label, Icon]) => (
             <button
@@ -447,10 +458,11 @@ export function StudioWorkspace({ renderCanvas }: Props) {
           ))}
         </nav>
         {mode === "director" && <div className="studio-desk-controls">
+          <button className="studio-icon-button" aria-label="刷新制作状态" title="刷新制作状态" disabled={refreshing} onClick={() => { setRefreshing(true); void refresh().catch(error => toast.error(error.message)).finally(() => setRefreshing(false)); }}><RefreshCw size={13} className={refreshing ? "animate-spin" : ""}/></button>
           <select aria-label="导演台视图" value={deskView} onChange={event => setDeskView(event.target.value as DeskView)}>
             <option value="shots">分镜</option><option value="brief">简报</option><option value="script">剧本</option><option value="refs">素材</option><option value="archive">成片</option>
           </select>
-          <button className="studio-icon-button" aria-label="自主制作" title="补齐缺失参考图、分镜图与视频" disabled={busy || !project?.shots.length} onClick={() => void runBatch("all")}><Sparkles size={16} /></button>
+          <button className="studio-icon-button" aria-label="自主制作" title="批量补齐缺失产物" disabled={busy || !project?.shots.length} onClick={() => void runBatch("all")}><ListChecks size={16} /></button>
         </div>}
         <div className="studio-account">
           <AuthWidget />
@@ -469,8 +481,8 @@ export function StudioWorkspace({ renderCanvas }: Props) {
         }}
       />
       <div className="studio-body">
-        {mode !== "canvas" && (
-          <EdgePanel><div className="studio-sidebar">
+        {(
+          <EdgePanel defaultPinned={mode === "director"}><div className="studio-sidebar">
             <button
               className="studio-new-project"
               disabled={busy}
@@ -504,6 +516,8 @@ export function StudioWorkspace({ renderCanvas }: Props) {
                 </button>
               ))}
             </div>
+            {project && <nav className="pre-desk-nav" aria-label="制作步骤">{([['brief','创作主题'],['script','脚本与批准'],['refs','参考图库'],['shots','分镜制作'],['archive','验收与成片']] as const).map(([id,label],i)=><button key={id} aria-current={mode === 'director' && deskView === id ? 'page' : undefined} onClick={()=>{setDeskView(id);void changeMode('director');}}><span>{String(i+1).padStart(2,'0')}</span>{label}<ChevronRight size={12}/></button>)}</nav>}
+            <a className="pre-playbook-link" href="/pre">组件规范 ↗</a>
           </div></EdgePanel>
         )}
         {loading ? (
@@ -525,6 +539,11 @@ export function StudioWorkspace({ renderCanvas }: Props) {
                 <div className="studio-canvas-host" inert={busy}>
                   {renderCanvas(project.canvasId, canvasVersion, (fn) => {
                     prepareRef.current = fn;
+                  }, async canvasId => {
+                    const p = projectRef.current;
+                    if (!p) return;
+                    const updated = await request<StudioProject>(`/api/studio/projects/${p.id}`, { method: "PATCH", body: JSON.stringify({ revision: p.revision, canvasId }) });
+                    projectRef.current = updated; setProject(updated);
                   })}
                 </div>
               )}
@@ -544,53 +563,20 @@ export function StudioWorkspace({ renderCanvas }: Props) {
                   onViewChange={setDeskView}
                 />
               )}
-              <div
-                className={
-                  mode === "agent"
-                    ? "studio-agent-layout"
-                    : "studio-floating-agent"
-                }
-                data-expanded={floating}
-              >
-                <div
-                  className="studio-agent-holder"
-                  style={
-                    mode !== "agent" && !floating
-                      ? { display: "none" }
-                      : undefined
-                  }
-                >
-                  <AgentPanel
-                    key={project.id}
-                    project={project}
-                    onRefresh={refresh}
-                    onBusy={onAgentBusy}
-                    beforeSend={beforeSend}
-                    onMinimize={
-                      mode === "agent" ? undefined : () => setFloating(false)
-                    }
-                    onUpload={() => fileRef.current?.click()}
-                    disabled={!!pending || batch}
-                  />
-                </div>
-                {mode === "agent" && (
-                  <ProjectOverview
-                    project={project}
-                    onDirector={(view) => { if (view) setDeskView(view); void changeMode("director"); }}
-                    onCanvas={() => void changeMode("canvas")}
-                  />
-                )}
-                {mode !== "agent" && !floating && (
-                  <button
-                    className="studio-agent-bubble"
-                    aria-label="展开创作 Agent"
-                    title="创作 Agent"
-                    onClick={() => setFloating(true)}
-                  >
-                    <Bot size={20} />
-                  </button>
-                )}
-              </div>
+              <FloatingAgent open={floating} onOpenChange={setFloating} busy={agentBusy}>
+                <AgentPanel
+                  key={`${project.id}:${project.activeConversationId}`}
+                  project={project} onRefresh={refresh} onBusy={onAgentBusy} beforeSend={beforeSend}
+                  onUpload={files => files?.length ? void upload(files) : fileRef.current?.click()}
+                  onConversation={async (id,settings) => {
+                    const current = projectRef.current;
+                    if (!current) return;
+                    const updated = await request<StudioProject>(`/api/studio/projects/${current.id}/conversations`, { method: id ? "PATCH" : "POST", body: JSON.stringify(id ? {conversationId:id,settings} : {}) });
+                    projectRef.current=updated; setProject(updated);
+                  }}
+                  disabled={!!pending || batch || remoteBusy}
+                />
+              </FloatingAgent>
               {batch && (
                 <div className="studio-batch-status" role="status">
                   <LoaderCircle size={15} className="animate-spin" />
@@ -611,131 +597,5 @@ export function StudioWorkspace({ renderCanvas }: Props) {
         )}
       </div>
     </div>
-  );
-}
-
-function ProjectOverview({
-  project: p,
-  onDirector,
-  onCanvas,
-}: {
-  project: StudioProject;
-  onDirector: (view?: DeskView) => void;
-  onCanvas: () => void;
-}) {
-  const steps = [
-    {
-      name: "导演脚本",
-      english: "SCRIPT",
-      count: p.script ? 1 : 0,
-      total: 1,
-      Icon: FileText,
-    },
-    {
-      name: "参考图库",
-      english: "REFERENCES",
-      count: p.references.filter((r) => r.assetName).length,
-      total: p.references.length,
-      Icon: ImagePlus,
-    },
-    {
-      name: "分镜制作",
-      english: "STORYBOARD",
-      count: p.shots.filter((s) => s.imageAsset).length,
-      total: p.shots.length,
-      Icon: Layers,
-    },
-    {
-      name: "镜头视频",
-      english: "PRODUCTION",
-      count: p.shots.filter((s) => s.videoAsset).length,
-      total: p.shots.length,
-      Icon: Film,
-    },
-  ];
-  return (
-    <aside className="studio-project-overview">
-      <div className="studio-overview-header">
-        <div>
-          <span className="studio-eyebrow">PROJECT OVERVIEW</span>
-          <h2>{p.title}</h2>
-        </div>
-        <span className="studio-format-chip">{p.aspect}</span>
-      </div>
-      {p.script && (
-        <WorkflowPreview project={p} onOpen={onCanvas} />
-      )}
-      <div className="studio-project-progress">
-        <div className="studio-section-line">
-          <h3>制作流程</h3>
-          <span>
-            {p.shots.reduce((n, s) => n + s.duration, 0) || p.targetDuration}{" "}
-            SEC
-          </span>
-        </div>
-        {steps.map(({ name, english, count, total, Icon }, i) => (
-          <button key={name} onClick={() => onDirector((["script", "refs", "shots", "shots"] as const)[i])}>
-            <span className="studio-step-number">
-              {count && count === total ? (
-                <Check size={13} />
-              ) : (
-                String(i + 1).padStart(2, "0")
-              )}
-            </span>
-            <span>
-              <strong>{name}</strong>
-              <small>{english}</small>
-            </span>
-            <span>{total ? `${count}/${total}` : "待规划"}</span>
-            <ChevronRight size={13} />
-          </button>
-        ))}
-      </div>
-      {p.sources.length > 0 && (
-        <div className="studio-overview-sources">
-          <span className="studio-eyebrow">
-            CREATIVE MATERIALS / {p.sources.length}
-          </span>
-          {p.sources.slice(0, 4).map((s) => (
-            <span key={s.id}>
-              <FileText size={13} />
-              {s.name}
-            </span>
-          ))}
-        </div>
-      )}
-      <details className="studio-recent-events">
-        <summary>制作记录</summary>
-        {p.events
-          .slice(-3)
-          .reverse()
-          .map((e) => (
-            <div key={e.id}>
-              <i data-status={e.status} />
-              <span>
-                {(
-                  {
-                    script: "编写脚本",
-                    reference: "参考图",
-                    storyboard: "分镜图",
-                    video: "视频",
-                    poll: "视频进度",
-                    review: "镜头验收",
-                    export: "成片合成",
-                  } as Record<string, string>
-                )[e.action] ?? e.action}{" "}
-                ·{" "}
-                {e.status === "done"
-                  ? "完成"
-                  : e.status === "error"
-                    ? "未完成"
-                    : "进行中"}
-                <small>{e.detail.slice(0, 80)}</small>
-              </span>
-            </div>
-          ))}
-        {!p.events.length && <p>准备好了，就从第一条消息开始。</p>}
-      </details>
-    </aside>
   );
 }

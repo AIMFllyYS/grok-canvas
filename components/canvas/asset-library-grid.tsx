@@ -39,8 +39,8 @@ export function AssetLibraryGrid({ assets, selected = [], onSelect, disabledReas
   const pages = Math.max(1, Math.ceil(filtered.length / 40));
   const current = Math.min(page, pages - 1);
   const chosen = new Set(selected);
-  return <div className="flex min-h-0 flex-1 flex-col gap-3">
-    <label className="flex h-9 shrink-0 items-center gap-2 rounded-lg border bg-background/50 px-3 text-muted-foreground"><Search size={14} /><input aria-label="搜索当前画布素材" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} placeholder="搜索素材名称…" className="w-full bg-transparent text-xs text-foreground outline-none" /></label>
+  return <div className="pre-library-grid flex min-h-0 flex-1 flex-col gap-3">
+    <label className="pre-library-search flex h-9 shrink-0 items-center gap-2 rounded-lg border bg-background/50 px-3 text-muted-foreground"><Search size={14} /><input aria-label="搜索当前画布素材" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} placeholder="搜索素材名称…" className="w-full bg-transparent text-xs text-foreground outline-none" /></label>
     <div className="flex shrink-0 gap-1" role="group" aria-label="素材来源">
       {(["all", "generated", "imported", "manual"] as const).map(value => <ControlButton key={value} aria-pressed={source === value} onClick={() => { setSource(value); setPage(0); }} className="flex-1 rounded-md px-1 py-1.5 text-[11px] text-muted-foreground">{value === "all" ? "全部" : LIBRARY_SOURCE_LABELS[value]}</ControlButton>)}
     </div>

@@ -1,4 +1,5 @@
 "use client";
+import { NodePanel } from "@/components/pre/node-panel";
 
 import { ControlButton } from "@/components/ui/control-button";
 
@@ -448,13 +449,10 @@ export function PromptPanel() {
   const placement = placeNodePanel({ x: x * viewport.zoom + viewport.x, bottom: (y + nodeHeight) * viewport.zoom + viewport.y, width: nodeWidth * viewport.zoom }, PANEL_WIDTH);
 
   return (
-    <div
-      className="ui-prompt-panel nodrag nowheel nopan absolute z-20 rounded-2xl bg-popover p-3 text-popover-foreground shadow-xl ring-1 ring-foreground/10"
-      style={placement}
-    >
+    <NodePanel {...placement}>
       {panelNode.type === "video"
         ? <VideoPanelBody key={panelNodeId} nodeId={panelNodeId} data={panelNode.data as VideoNodeData} />
         : <PanelBody key={panelNodeId} nodeId={panelNodeId} data={panelNode.data as ImageNodeData} />}
-    </div>
+    </NodePanel>
   );
 }

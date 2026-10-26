@@ -10,6 +10,7 @@ import path from "node:path";
 import { dataDir } from "../data-dir";
 import { createCanvas } from "../canvas-store";
 import { normalizeMessages, finalizeInterruptedMessages } from "./messages";
+import { ensureConversations, finalizeConversations } from "./conversations";
 import {
   DEFAULT_NEGATIVE,
   DEFAULT_STYLE,
@@ -46,6 +47,8 @@ export async function loadProject(id: string): Promise<StudioProject> {
       await readFile(projectPath(id), "utf8"),
     ) as StudioProject;
     project.messages = (busy.has(id)?normalizeMessages:finalizeInterruptedMessages)(project.messages ?? [], project.id);
+    ensureConversations(project);
+    if (!busy.has(id)) finalizeConversations(project);
     return project;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
@@ -130,6 +133,7 @@ export async function createProject(
     createdAt: now,
     updatedAt: now,
   };
+  ensureConversations(project);
   await writeProject(project);
   return project;
 }

@@ -16,6 +16,7 @@ import {
 } from "@/lib/studio/schema";
 import { syncProjectCanvas } from "@/lib/studio/canvas";
 import { studioError } from "@/lib/studio/http";
+import { loadCanvas } from "@/lib/canvas-store";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ id: string }> };
@@ -49,6 +50,7 @@ const sourceSchema = z.object({
 });
 const patchSchema = z.object({
   revision: z.number().int().nonnegative(),
+  canvasId: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(100).optional(),
   title: z.string().trim().min(1).max(160).optional(),
   brief: z.string().max(60000).optional(),
   aspect: z.enum(["16:9", "9:16", "1:1"]).optional(),
@@ -56,6 +58,7 @@ const patchSchema = z.object({
   style: bilingual.optional(),
   negative: bilingual.optional(),
   script: z.string().max(80000).optional(),
+  approveScript: z.boolean().optional(),
   source: sourceSchema.optional(),
   removeSource: z.string().max(100).optional(),
   shot: shotSchema.optional(),
@@ -70,6 +73,7 @@ export async function PATCH(request: Request, context: Context) {
       body = patchSchema.parse(await request.json());
     release = acquireProduction(id);
     if (body.source?.assetName) await access(assetPath(body.source.assetName));
+    if (body.canvasId && !(await loadCanvas(body.canvasId))) throw new StudioError("所选画布不存在", 404);
     const saved = await updateProject(
       id,
       (p) => {
@@ -79,6 +83,8 @@ export async function PATCH(request: Request, context: Context) {
           (body.negative !== undefined &&
             JSON.stringify(body.negative) !== JSON.stringify(p.negative)) ||
           (body.aspect !== undefined && body.aspect !== p.aspect);
+        const scriptChange = (body.script !== undefined && body.script !== p.script) || !!body.shot || visualChange;
+        if (scriptChange) { p.scriptVersion = (p.scriptVersion ?? 0) + 1; p.scriptApproval = undefined; }
         if (p.shots.some((s) => s.taskId) && (body.shot || visualChange))
           throw new StudioError(
             "视频正在生成，请等待完成后再修改画面规范",
@@ -87,6 +93,7 @@ export async function PATCH(request: Request, context: Context) {
         if (visualChange && p.shots.some((s) => s.videoApproved))
           throw new StudioError("修改全片画面规范前，请先撤销已完成视频的验收");
         for (const key of [
+          "canvasId",
           "title",
           "brief",
           "aspect",
@@ -142,6 +149,10 @@ export async function PATCH(request: Request, context: Context) {
         if (p.shots.length) {
           const errors = validatePlan(p);
           if (errors.length) throw new StudioError(errors.join("；"), 422);
+        }
+        if (body.approveScript !== undefined) {
+          if (body.approveScript && (!p.script.trim() || !p.shots.length)) throw new StudioError("请先生成完整脚本与分镜计划");
+          p.scriptApproval = body.approveScript ? { version: p.scriptVersion ?? 0, approvedAt: new Date().toISOString() } : undefined;
         }
       },
       body.revision,

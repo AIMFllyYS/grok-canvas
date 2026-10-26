@@ -71,6 +71,10 @@ export async function syncProjectCanvas(project: StudioProject) {
           name: source.name,
           assetName: source.assetName,
         });
+      else if (source.kind === "video" && source.assetName)
+        add(`source-${source.id}`, "video", -340, i * 260, {
+          name: source.name, assetName: source.assetName, prompt: "", status: "idle", duration: 10, aspectRatio: "16:9", resolution: "720p", audio: false, uploadInputs: [],
+        });
       else
         add(`source-${source.id}`, "workflow", -340, i * 260, {
           name: source.name,
@@ -129,7 +133,7 @@ export async function syncProjectCanvas(project: StudioProject) {
       edge(`shot-${shot.id}`, `video-${shot.id}`, "first");
       edge(`video-${shot.id}`, "assembly");
     });
-    add("assembly", "workflow", 2020, 80, {
+    add("assembly", project.exportAsset ? "video" : "workflow", 2020, 80, {
       name: "成片 / 验收",
       stage: "assembly",
       text: project.exportAsset
@@ -137,6 +141,7 @@ export async function syncProjectCanvas(project: StudioProject) {
         : "逐镜验收后合成完整视频",
       count: project.shots.filter((s) => s.videoApproved).length,
       assetName: project.exportAsset,
+      ...(project.exportAsset ? { prompt: "", status: "idle", duration: project.shots.reduce((sum, s) => sum + s.duration, 0), aspectRatio: project.aspect, resolution: "720p", audio: false, uploadInputs: [] } : {}),
     });
     const managed = new Set(
       existing

@@ -60,10 +60,10 @@ function normalizeDoc(loaded: CanvasDoc): CanvasDoc {
 }
 
 export default function Home() {
-  return <WorkspacePreferencesProvider><AuthProvider><StudioWorkspace renderCanvas={(id,version,register)=><DesktopWorkspace><Workspace key={`${id}:${version}`} requestedCanvasId={id} onRegisterPrepare={register}/></DesktopWorkspace>} /></AuthProvider></WorkspacePreferencesProvider>;
+  return <WorkspacePreferencesProvider><AuthProvider><StudioWorkspace renderCanvas={(id,version,register,onCanvasChange)=><DesktopWorkspace><Workspace key={`${id}:${version}`} requestedCanvasId={id} onRegisterPrepare={register} onCanvasChange={onCanvasChange}/></DesktopWorkspace>} /></AuthProvider></WorkspacePreferencesProvider>;
 }
 
-function Workspace({requestedCanvasId,onRegisterPrepare}:{requestedCanvasId:string;onRegisterPrepare:(prepare:()=>Promise<boolean>)=>void}) {
+function Workspace({requestedCanvasId,onRegisterPrepare,onCanvasChange}:{requestedCanvasId:string;onRegisterPrepare:(prepare:()=>Promise<boolean>)=>void;onCanvasChange:(id:string)=>Promise<void>}) {
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveRetrying, setSaveRetrying] = useState(false);
@@ -147,7 +147,7 @@ function Workspace({requestedCanvasId,onRegisterPrepare}:{requestedCanvasId:stri
       return;
     }
     try {
-      await openCanvas(id);
+      await onCanvasChange(id);
     } catch {
       toast.error("画布加载失败，请重试");
     }
@@ -164,7 +164,7 @@ function Workspace({requestedCanvasId,onRegisterPrepare}:{requestedCanvasId:stri
         { id: created.id, name: created.name, createdAt: created.createdAt, updatedAt: created.updatedAt },
         ...current,
       ]);
-      setDoc(created);
+      await onCanvasChange(created.id);
     } catch {
       toast.error("新建画布失败，请重试");
     }
@@ -197,7 +197,7 @@ function Workspace({requestedCanvasId,onRegisterPrepare}:{requestedCanvasId:stri
     if (doc && id === doc.id) {
       if (remaining[0]) {
         try {
-          await openCanvas(remaining[0].id);
+          await onCanvasChange(remaining[0].id);
         } catch {
           toast.error("画布加载失败，请重试");
         }

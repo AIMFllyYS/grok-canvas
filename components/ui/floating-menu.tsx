@@ -4,12 +4,12 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { fitFloatingRect } from "@/lib/floating-placement";
 import { ControlButton } from "./control-button";
 
-export function MenuItem({ label, shortcut, disabled, onClick, danger = false }: {
-  label: string; shortcut?: string; disabled?: boolean; onClick: () => void; danger?: boolean;
+export function MenuItem({ label, shortcut, disabled, onClick, danger = false, icon }: {
+  label: string; shortcut?: string; disabled?: boolean; onClick: () => void; danger?: boolean; icon?: ReactNode;
 }) {
   return <ControlButton role="menuitem" data-danger={danger || label.startsWith("删除")} disabled={disabled} onClick={onClick}
     className="flex w-full items-center justify-between gap-6 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-50">
-    <span>{label}</span>{shortcut && <span className="text-xs text-muted-foreground">{shortcut}</span>}
+    <span className="flex items-center gap-2">{icon}{label}</span>{shortcut && <span className="text-xs text-muted-foreground">{shortcut}</span>}
   </ControlButton>;
 }
 

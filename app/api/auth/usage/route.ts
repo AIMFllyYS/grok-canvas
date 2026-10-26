@@ -5,10 +5,10 @@ import { XaiApiError } from "@/lib/xai/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export async function GET() {
+export async function GET(request: Request) {
   const headers = { "Cache-Control": "no-store" };
   try {
-    return NextResponse.json(await readAccountUsage(), { headers });
+    return NextResponse.json(await readAccountUsage(new URL(request.url).searchParams.get("refresh") === "1"), { headers });
   } catch (error) {
     if (error instanceof UsageError) return NextResponse.json({ error: { kind: error.kind, message: error.message } }, { status: error.status, headers });
     if (error instanceof OAuthError || error instanceof XaiApiError && ["not_logged_in", "auth_expired"].includes(error.kind)) {

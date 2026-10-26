@@ -1,6 +1,6 @@
 {
   "name": "grok-canvas",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "在无限画布上使用 Grok 生成、连接和迭代图片与视频。",
   "license": "MIT",
@@ -19,7 +19,7 @@
   },
   "scripts": {
     "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace && pnpm test:studio",
-    "test:studio": "node --test tests/studio.test.mjs",
+    "test:studio": "node --test tests/studio.test.mjs tests/studio-workstation.test.mjs tests/studio-sdk.test.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "next dev -H 127.0.0.1 -p 3210",
     "build": "next build",
@@ -89,6 +89,7 @@
     }
   },
   "dependencies": {
+    "@ai-sdk/openai": "^4.0.102",
     "@ai-sdk/openai-compatible": "^3.0.78",
     "@ai-sdk/react": "^4.0.157",
     "@base-ui/react": "^1.8.0",

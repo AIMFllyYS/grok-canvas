@@ -37,9 +37,15 @@ export function ResizeGrip({ name, storageKey, initial, min, max, onWidth }: {
     onKeyDown={event => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); set(width.current + (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? 32 : 8)); } }} />;
 }
 
-export function EdgePanel({ children }: { children: ReactNode }) {
+export function EdgePanel({ children, defaultPinned = false }: { children: ReactNode; defaultPinned?: boolean }) {
   const [open, setOpen] = useState(false), [pinned, setPinned] = useState(false), [width, setWidth] = useState(248);
   const trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1001px)");
+    const update = () => { setPinned(defaultPinned && media.matches); setOpen(false); };
+    update(); media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, [defaultPinned]);
   return <div className="studio-edge-dock" data-open={open || pinned} data-pinned={pinned} style={{ "--edge-width": `${width}px` } as CSSProperties}
     onMouseLeave={event => { if (!pinned && !event.buttons && !event.currentTarget.contains(document.activeElement)) setOpen(false); }}
     onBlur={event => { if (!pinned && !event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}

@@ -17,7 +17,7 @@ export function validateImageReferences(values: unknown): string[] {
 
 export function resolveCanvasReferences(node: ReferenceNode, nodes: ReferenceNode[], edges: ReferenceEdge[]): ResolvedReferences {
   const video = node.type === "video";
-  const incoming = edges.filter(edge => edge.target === node.id&&!isWorkflowControlEdge(edge));
+  const incoming = edges.filter(edge => edge.target === node.id&&!isWorkflowControlEdge(edge) && edge.data?.promptInput !== true && !["text", "prompt"].includes(nodes.find(n => n.id === edge.source)?.type ?? ""));
   const byId = new Map(nodes.map(source => [source.id, source]));
   const names = { ...node.data.attachmentNames as Record<string, string> | undefined };
   const inputs: VideoInput[] = [];

@@ -13,7 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body>
-        <ThemeProvider attribute="class" defaultTheme="dark" themes={["light","dark","paper"]} enableSystem disableTransitionOnChange>
+        <ThemeProvider attribute="class" defaultTheme="paper" themes={["light","dark","paper"]} enableSystem disableTransitionOnChange>
           {children}
           <Toaster />
         </ThemeProvider>

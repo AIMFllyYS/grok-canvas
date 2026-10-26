@@ -7,8 +7,11 @@ const DATA_DIR = dataDir();
 const CANVASES_DIR = path.join(DATA_DIR, "canvases");
 const APP_STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
-const writes = new Map<string, Promise<void>>();
-const deletedIds = new Set<string>();
+// API route bundles and Agent tools must serialize writes through the same queue.
+const canvasGlobals = globalThis as typeof globalThis & { __grokCanvasStores?: Map<string, { writes: Map<string, Promise<void>>; deletedIds: Set<string> }> };
+const stores = (canvasGlobals.__grokCanvasStores ??= new Map());
+if (!stores.has(DATA_DIR)) stores.set(DATA_DIR, { writes: new Map(), deletedIds: new Set() });
+const { writes, deletedIds } = stores.get(DATA_DIR)!;
 
 async function withCanvasLock<T>(id: string, action: () => Promise<T>): Promise<T> {
   const previous = writes.get(id) ?? Promise.resolve();

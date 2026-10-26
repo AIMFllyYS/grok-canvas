@@ -1,5 +1,6 @@
 import { loadProject } from "./store";
 import { produce, type ProductionAction } from "./production";
+import { isScriptApproved } from "./schema";
 type BatchStage = "reference" | "storyboard" | "video" | "all";
 export type BatchProgress = {
   stage: string;
@@ -36,6 +37,11 @@ export async function* runProductionBatch(
     await deps.produce(projectId, "script", {}, signal);
     completed++;
     yield { stage: "script", completed, failed: [...failed], finished: false };
+  }
+  p = await deps.load(projectId);
+  if (!isScriptApproved(p)) {
+    yield { stage: "approval", completed, failed, finished: true, message: "脚本已准备好。请在导演台审阅并确认批准，再继续批量制作。" };
+    return;
   }
   for (const current of stage === "all"
     ? (["reference", "storyboard", "video"] as const)

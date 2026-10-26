@@ -1,43 +1,35 @@
 "use client";
-
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import type { UsageSnapshot } from "@/lib/xai/usage";
-
-export function UsageIndicator({ active, loggedIn }: { active: boolean; loggedIn: boolean }) {
-  const [data, setData] = useState<UsageSnapshot | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const latest = useRef<UsageSnapshot | null>(null);
+export function UsageIndicator({ active, loggedIn, compact = false }: { active: boolean; loggedIn: boolean; compact?: boolean }) {
+  const [data, setData] = useState<UsageSnapshot | null>(null), [error, setError] = useState<string | null>(null), [loading, setLoading] = useState(false);
+  const latest = useRef<UsageSnapshot | null>(null), pending = useRef(false), abort = useRef<AbortController | null>(null);
+  const refresh = useCallback(async (force = false) => {
+    if (!loggedIn || pending.current || !force && (document.hidden || latest.current && Date.now() - Date.parse(latest.current.fetchedAt) < 60000)) return;
+    pending.current = true; setLoading(true); setError(null);
+    const controller = new AbortController(); abort.current = controller;
+    try {
+      const response = await fetch(`/api/auth/usage${force ? "?refresh=1" : ""}`, { cache: "no-store", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message ?? "暂无法读取共享额度");
+      if (payload.status !== "ready" || !(Number.isFinite(payload.usedPercent) || Number.isFinite(payload.balanceCredits))) throw new Error("用量数据暂不可用");
+      if (!controller.signal.aborted) { latest.current = payload; setData(payload); }
+    } catch (reason) { if (!controller.signal.aborted) setError((reason as Error).message); }
+    finally { pending.current = false; if (!controller.signal.aborted) setLoading(false); }
+  }, [loggedIn]);
   useEffect(() => {
+    if (!loggedIn) { latest.current = null; setData(null); setError(null); }
     if (!active || !loggedIn) return;
-    const controller = new AbortController();
-    let loading = false;
-    const refresh = async () => {
-      if (document.hidden || loading || latest.current && Date.now() - Date.parse(latest.current.fetchedAt) < 60_000) return;
-      loading = true;
-      setError(null);
-      try {
-        const response = await fetch("/api/auth/usage", { cache: "no-store", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]) });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error?.message ?? "暂无法读取共享额度");
-        if (payload.status !== "ready" || typeof payload.usedPercent !== "number" || !Number.isFinite(payload.usedPercent) || payload.usedPercent < 0 || payload.usedPercent > 100) throw new Error("用量数据暂不可用");
-        if (!controller.signal.aborted) { latest.current = payload; setData(payload); }
-      } catch (reason) {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "暂无法读取共享额度");
-      } finally { loading = false; }
-    };
     void refresh();
-    document.addEventListener("visibilitychange", refresh);
-    return () => { controller.abort(); document.removeEventListener("visibilitychange", refresh); };
-  }, [active, loggedIn]);
-  return <section aria-label="Grok 共享额度" className="space-y-2 px-2 py-3">
-    <div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">Grok 共享额度</span><span className="tabular-nums">{loggedIn ? data ? `已用 ${Number(data.usedPercent.toFixed(1))}%` : error ? "暂不可用" : "读取中…" : "登录后查看"}</span></div>
-    <div role="progressbar" aria-label="共享额度已用百分比" aria-valuemin={0} aria-valuemax={100} aria-valuenow={data?.usedPercent} className="h-1.5 overflow-hidden rounded-full bg-muted">
-      {data && <div className={`h-full rounded-full ${data.usedPercent >= 90 ? "bg-destructive" : "bg-foreground/75"}`} style={{ width: `${data.usedPercent}%` }} />}
-    </div>
-    {error && <p role="status" className="text-[11px] leading-relaxed text-muted-foreground">{data ? `更新失败 · ${error}` : error}</p>}
-    {data && <div className="space-y-1 text-[10px] text-muted-foreground">
-      {data.resetAt && <p>重置于 {new Date(data.resetAt).toLocaleString()}</p>}
-      <p>更新于 {new Date(data.fetchedAt).toLocaleTimeString()} · 与Grok账户共享</p>
-    </div>}
+    const update = () => void refresh(); document.addEventListener("visibilitychange", update);
+    return () => { abort.current?.abort(); pending.current = false; document.removeEventListener("visibilitychange", update); };
+  }, [active, loggedIn, refresh]);
+  const amount = loggedIn ? data ? data.usedPercent !== null ? `${Number(data.usedPercent.toFixed(1))}%` : `余额 ${data.balanceCredits?.toLocaleString()}` : loading ? "读取中" : error ? "暂不可用" : "—" : "未登录";
+  const info = error ? `${data ? "保留上次数据。" : ""}${error}` : data ? `${data.usedPercent !== null ? `已用 ${amount}` : `上游 credits 余额 ${data.balanceCredits}，按需已用 ${data.onDemandUsed ?? "未知"} / 上限 ${data.onDemandCap ?? "未知"}。上游当前未返回订阅已用百分比` }，更新于 ${new Date(data.fetchedAt).toLocaleTimeString()}${data.resetAt ? `；重置于 ${new Date(data.resetAt).toLocaleString()}` : ""}` : "与 Grok 账户共享";
+  return <section aria-label="Grok 共享额度" className={compact ? "pre-usage-inline" : "pre-usage-details"} title={info}>
+    <div className="pre-usage-line"><span>共享额度</span><span className="pre-usage-value">{amount}</span><button type="button" aria-label="刷新 Grok 共享额度" title={error ? `${error}，点击刷新` : "刷新共享额度"} disabled={!loggedIn || loading} onClick={() => void refresh(true)}><RefreshCw size={12} className={loading ? "animate-spin" : ""}/></button></div>
+    {data?.usedPercent !== null && <div role="progressbar" aria-label="共享额度已用百分比" aria-valuemin={0} aria-valuemax={100} aria-valuenow={data?.usedPercent ?? undefined} aria-valuetext={info} className="pre-usage-progress"><span style={{ width: `${data?.usedPercent ?? 0}%` }}/></div>}
+    {!compact && <p role={error ? "status" : undefined}>{info}</p>}
   </section>;
 }
