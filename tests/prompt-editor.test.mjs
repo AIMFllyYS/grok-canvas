@@ -35,6 +35,7 @@ function renderEditor({ query = "", active = 0, readOnly = false, suggestions = 
       if (name === "@/lib/prompt-references") return references.module;
       if (name === "@/lib/asset-drag") return assetDrag.module;
       if (name === "@/lib/floating-placement") return {};
+      if (name === "./use-edit-lease") return { useEditLease: () => ({ onFocus() {}, onBlur() {} }) };
       throw new Error(`未模拟的依赖：${name}`);
     },
   });

@@ -9,6 +9,8 @@ const previous = process.env.GROK_CANVAS_DATA_DIR;
 process.env.GROK_CANVAS_DATA_DIR = data;
 const store = await loadTypescript("lib/agent/store.ts", { packages: true });
 const canvas = await loadTypescript("lib/agent/canvas.ts", { packages: true });
+const leases = await loadTypescript("lib/canvas-edit-leases.ts");
+const canvasStore = await loadTypescript("lib/canvas-store.ts");
 const cleanup = await loadTypescript("lib/canvas-cleanup.ts", {
   packages: true,
 });
@@ -24,11 +26,24 @@ after(async () => {
   await Promise.all([
     store.dispose(),
     canvas.dispose(),
+    leases.dispose(),
+    canvasStore.dispose(),
     cleanup.dispose(),
     conversations.dispose(),
     generation.dispose(),
   ]);
   await rm(data, { recursive: true, force: true });
+});
+test("Agent 不覆盖正在编辑的正文，释放租约后可继续修改", async () => {
+  const id = "lease-test";
+  await canvasStore.module.saveCanvas({ ...canvasStore.module.emptyCanvas(id), nodes: [{ id: "n", type: "canvasText", position: { x: 0, y: 0 }, data: { name: "文稿", content: "旧" } }] }, -1);
+  assert.equal(leases.module.claimEditLease(id, "n", "content", "user"), true);
+  await assert.rejects(canvas.module.mutateCanvas(id, doc => { doc.nodes[0].data.content = "Agent"; }), /用户正在编辑/);
+  await assert.rejects(canvas.module.mutateCanvas(id, doc => { doc.nodes = []; }), /用户正在编辑/);
+  assert.equal((await canvasStore.module.loadCanvas(id)).nodes[0].data.content, "旧");
+  leases.module.releaseEditLease(id, "n", "content", "user");
+  await canvas.module.mutateCanvas(id, doc => { doc.nodes[0].data.content = "Agent"; });
+  assert.equal((await canvasStore.module.loadCanvas(id)).nodes[0].data.content, "Agent");
 });
 test("Agent first-frame requests follow the source ratio while text-to-video retains the chosen ratio", () => {
   const source = { id: "i", type: "image", data: { assetName: "source.png" } },

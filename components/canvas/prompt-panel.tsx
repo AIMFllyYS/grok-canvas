@@ -30,6 +30,7 @@ import { useDesktopAvailable } from "@/components/desktop-workspace";
 import { useCanvasAssets } from "./canvas-assets-context";
 import { resolveCanvasReferences, type ResolvedReferences } from "@/lib/canvas-references";
 import { LIBRARY_SOURCE_LABELS } from "@/lib/canvas-library";
+import { useEditLease } from "./use-edit-lease";
 
 const PANEL_WIDTH = 560;
 
@@ -467,7 +468,9 @@ export function PromptPanel() {
 
 function TextPanelBody({ nodeId, content }: { nodeId: string; content: string }) {
   const { updateNodeData } = useReactFlow();
+  const lease = useEditLease(nodeId, "content");
   return <textarea aria-label="编辑文本节点" placeholder="输入 Markdown 文本" value={content}
+    {...lease}
     onChange={event => updateNodeData(nodeId, { content: event.target.value })}
     className="ui-prompt-editor nodrag nopan nowheel min-h-24 max-h-60 w-full resize-y bg-transparent px-1 py-2 text-base outline-none" />;
 }

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { isLibraryAsset } from "@/lib/canvas-library";
-import { deleteCanvas, isSafeCanvasId, loadCanvas, saveCanvas, saveLastCanvasId, type CanvasDoc } from "@/lib/canvas-store";
+import { deleteCanvas, isSafeCanvasId, saveCanvas, saveLastCanvasId, type CanvasDoc } from "@/lib/canvas-store";
+import { agentBusy } from "@/lib/agent/store";
+import { recoverStaleGenerationClaims } from "@/lib/generation-claims";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,11 +14,14 @@ export async function GET(request: Request, context: Params) {
   if (!isSafeCanvasId(id)) {
     return NextResponse.json({ error: { kind: "bad_request", message: "bad canvas id" } }, { status: 400 });
   }
-  const doc = await loadCanvas(id);
+  const doc = await recoverStaleGenerationClaims(id);
   if (!doc) {
     return NextResponse.json({ error: { kind: "not_found", message: "canvas not found" } }, { status: 404 });
   }
-  if (new URL(request.url).searchParams.get("background") !== "1") await saveLastCanvasId(id);
+  const params = new URL(request.url).searchParams;
+  if (params.get("background") !== "1") await saveLastCanvasId(id);
+  const revision = params.get("sinceRevision");
+  if (revision !== null && /^\d+$/.test(revision) && Number(revision) === doc.revision) return new Response(null, { status: 304, headers: { "Cache-Control": "no-store" } });
   return NextResponse.json(doc, { headers: { "Cache-Control": "no-store" } });
 }
 
@@ -64,6 +69,11 @@ export async function DELETE(_request: Request, context: Params) {
   if (!isSafeCanvasId(id)) {
     return NextResponse.json({ error: { kind: "bad_request", message: "bad canvas id" } }, { status: 400 });
   }
-  await deleteCanvas(id);
+  try {
+    await deleteCanvas(id, () => !agentBusy(id));
+  } catch (error) {
+    if (error instanceof Error && error.message === "画布 Agent 正在运行，请先停止") return NextResponse.json({ error: { kind: "agent_busy", message: error.message } }, { status: 409 });
+    throw error;
+  }
   return NextResponse.json({ ok: true });
 }

@@ -72,6 +72,40 @@ function mockDeps(overrides = {}) {
   };
 }
 
+test("带占用的视频任务完成后释放同一任务占用", async () => {
+  const finished = [], verified = [];
+  const { deps } = mockDeps({
+    verifyClaim: async (...args) => verified.push(args),
+    finishClaim: async (...args) => finished.push(args),
+    getGeneration: async () => ({ status: "done", video: { url: "https://example.test/video.mp4" } }),
+  });
+  const claim = { nodeId: "source", id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" };
+  const created = await submitVideoGeneration(t2vBody({ claim }), deps);
+  const record = await readVideoTask(created.taskId);
+  assert.deepEqual(record.claim, claim);
+  const view = await pollVideoTask(created.taskId, deps);
+  assert.equal(view.generationId, claim.id);
+  assert.deepEqual(verified, [["canvas-1", "source", claim.id]]);
+  assert.deepEqual(finished, [["canvas-1", "source", claim.id, "completed"]]);
+});
+test("视频上游提交结果不确定时保留未知占用，不自动重试", async () => {
+  const finished = [];
+  const { deps } = mockDeps({ verifyClaim: async () => {}, finishClaim: async (...args) => finished.push(args), createGeneration: async () => { throw new Error("断开"); } });
+  const claim = { nodeId: "source", id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };
+  await assert.rejects(submitVideoGeneration(t2vBody({ claim }), deps), /断开/);
+  assert.deepEqual(finished, [["canvas-1", "source", claim.id, "unknown"]]);
+});
+test("重启恢复时释放已终态但未清理的任务占用", async () => {
+  const finished = [];
+  const claim = { nodeId: "source", id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+  const record = await createVideoTask("req-recovery-claim", "canvas-recovery", "output", snapshot(), claim);
+  await updateVideoTask(record.taskId, { status: "failed" });
+  const { deps } = mockDeps({ finishClaim: async (...args) => finished.push(args) });
+  await recoverVideoTasks(deps);
+  assert.deepEqual(finished, [["canvas-recovery", "source", claim.id, "completed"]]);
+  assert.equal((await readVideoTask(record.taskId)).claimReleased, true);
+});
+
 test("parameter validation failures return VideoRequestError 400 with the Chinese message", async () => {
   const { deps, calls } = mockDeps();
   await assert.rejects(

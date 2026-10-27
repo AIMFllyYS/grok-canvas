@@ -1,5 +1,5 @@
 import type { CanvasDoc } from "./canvas-store";
-import { canvasSaveBody } from "./canvas-document";
+import { diffCanvasOperations } from "./canvas-operations";
 import { assetsFromOutcome, mergeLibraryAssets, normalizeLibraryAssets } from "./canvas-library";
 import { applyGenerationOutcome, type GenerationOutcome } from "./multi-image";
 import { videoNodePatchFromView, type VideoTaskView } from "./video-runtime";
@@ -16,7 +16,9 @@ async function persistPatch(canvasId: string, patch: (doc: CanvasDoc) => CanvasD
     const doc = await response.json() as CanvasDoc;
     const next = patch(doc);
     if (!next) return;
-    const saved = await request(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(canvasSaveBody(next)) });
+    const operations = diffCanvasOperations(doc, next);
+    if (!operations.length) return;
+    const saved = await request(`${url}/operations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operations }) });
     if (saved.ok || saved.status === 404) return;
     if (saved.status !== 409) break;
   }
@@ -41,6 +43,7 @@ export async function persistVideoOutcome(canvasId: string, nodeId: string, view
   return persistPatch(canvasId, doc => {
     const source = (doc.nodes as StoredNode[]).find(node => node.id === nodeId);
     if (!source) { options.orphan?.(); return null; }
+    if (typeof source.data.generationId === "string" && view.generationId && source.data.generationId !== view.generationId) return null;
     return { ...doc, nodes: (doc.nodes as StoredNode[]).map(node => node.id === nodeId ? { ...node, data: { ...node.data, ...videoNodePatchFromView(view) } } : node) };
   }, options);
 }

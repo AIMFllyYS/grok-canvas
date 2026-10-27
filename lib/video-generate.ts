@@ -35,6 +35,9 @@ export type VideoGenerateDeps = {
   getGeneration: (requestId: string) => Promise<VideoUpstreamStatus>;
   toDataUri: (name: string) => Promise<string>;
   saveRemote: (url: string, snapshot: VideoGenerationSnapshot) => Promise<{ name: string; localUrl: string; bytes: number }>;
+  verifyClaim?: (canvasId: string, nodeId: string, id: string) => Promise<void>;
+  finishClaim?: (canvasId: string, nodeId: string, id: string, state: "completed" | "unknown") => Promise<void>;
+  attachClaim?: (canvasId: string, nodeId: string, id: string, taskId: string) => Promise<void>;
 };
 
 /** 任务快照 → 视频生成记录：生成信息面板凭它解释「当时引用了谁」。 */
@@ -62,6 +65,7 @@ export type VideoTaskView = {
   requestId: string;
   canvasId: string;
   nodeId: string;
+  generationId?: string;
   status: VideoTaskStatus;
   waitedSeconds: number;
   result: VideoTaskResult | null;
@@ -80,13 +84,24 @@ export async function submitVideoGeneration(
     throw new VideoRequestError(error instanceof Error ? error.message : String(error));
   }
 
-  const created = await deps.createGeneration(await upstreamBody(plan, deps));
+  const upstream = await upstreamBody(plan, deps);
+  if (parsed.claim) {
+    if (!deps.verifyClaim) throw new VideoRequestError("无法确认生成任务占用", 409);
+    await deps.verifyClaim(parsed.canvasId, parsed.claim.nodeId, parsed.claim.id);
+  }
+  let created: { request_id?: string };
+  try { created = await deps.createGeneration(upstream); }
+  catch (error) {
+    if (parsed.claim) await deps.finishClaim?.(parsed.canvasId, parsed.claim.nodeId, parsed.claim.id, "unknown");
+    throw error;
+  }
   const requestId = created?.request_id;
   if (typeof requestId !== "string" || !requestId) {
     throw new VideoRequestError("上游未返回 request_id", 502);
   }
 
-  const record = await createVideoTask(requestId, parsed.canvasId, parsed.nodeId, plan);
+  const record = await createVideoTask(requestId, parsed.canvasId, parsed.nodeId, plan, parsed.claim);
+  if (parsed.claim) await deps.attachClaim?.(parsed.canvasId, parsed.claim.nodeId, parsed.claim.id, record.taskId);
   return { taskId: record.taskId, requestId: record.requestId };
 }
 
@@ -121,10 +136,15 @@ export async function recoverVideoTasks(deps: VideoGenerateDeps): Promise<VideoT
 }
 
 async function advanceVideoTask(record: VideoTaskRecord, deps: VideoGenerateDeps): Promise<VideoTaskView> {
-  if (isTerminalVideoTask(record)) return toView(record);
-  if (record.status === "save_failed") return retryDownload(record, deps);
-  if (record.status === "pending") return pollPending(record, deps);
-  return toView(record);
+  const view = isTerminalVideoTask(record) ? toView(record)
+    : record.status === "save_failed" ? await retryDownload(record, deps)
+    : record.status === "pending" ? await pollPending(record, deps)
+    : toView(record);
+  if (record.claim && !record.claimReleased && deps.finishClaim && (view.status === "completed" || view.status === "failed" || view.status === "expired")) {
+    await deps.finishClaim(record.canvasId, record.claim.nodeId, record.claim.id, "completed");
+    await updateVideoTask(record.taskId, { claimReleased: true });
+  }
+  return view;
 }
 
 async function pollPending(record: VideoTaskRecord, deps: VideoGenerateDeps): Promise<VideoTaskView> {
@@ -238,6 +258,7 @@ function toView(record: VideoTaskRecord): VideoTaskView {
     requestId: record.requestId,
     canvasId: record.canvasId,
     nodeId: record.nodeId,
+    ...(record.claim ? { generationId: record.claim.id } : {}),
     status: record.status,
     waitedSeconds: waitedSeconds(record.createdAt),
     result: record.result,
@@ -292,6 +313,7 @@ function parseSubmitBody(body: unknown): {
   prompt: string;
   canvasId: string;
   nodeId: string;
+  claim?: { nodeId: string; id: string };
   inputs: VideoInput[];
   parameters: VideoParameters;
 } {
@@ -304,10 +326,18 @@ function parseSubmitBody(body: unknown): {
   if (typeof record.nodeId !== "string" || !record.nodeId.trim()) {
     throw new VideoRequestError("缺少节点 ID");
   }
+  let claim: { nodeId: string; id: string } | undefined;
+  if (record.claim !== undefined) {
+    if (!record.claim || typeof record.claim !== "object") throw new VideoRequestError("生成占用无效");
+    const value = record.claim as Record<string, unknown>;
+    if (typeof value.nodeId !== "string" || !value.nodeId || typeof value.id !== "string" || !/^[0-9a-f-]{36}$/i.test(value.id)) throw new VideoRequestError("生成占用无效");
+    claim = { nodeId: value.nodeId, id: value.id };
+  }
   return {
     prompt: record.prompt,
     canvasId: record.canvasId.trim(),
     nodeId: record.nodeId.trim(),
+    ...(claim ? { claim } : {}),
     inputs: parseInputs(record.inputs),
     parameters: parseParameters(record.parameters),
   };

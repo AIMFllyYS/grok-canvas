@@ -1,0 +1,40 @@
+import test, { after } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { loadTypescript } from "./helpers/load-typescript.mjs";
+const dir = await mkdtemp(path.join(os.tmpdir(), "grok-claims-"));
+process.env.GROK_CANVAS_DATA_DIR = dir;
+const store = await loadTypescript("lib/canvas-store.ts");
+const claims = await loadTypescript("lib/generation-claims.ts");
+after(async () => { await store.dispose(); await claims.dispose(); await rm(dir, { recursive: true, force: true }); });
+test("相同节点并发占用只允许一个成功，旧任务不能释放新任务", async () => {
+  await store.module.saveCanvas({ ...store.module.emptyCanvas("c"), nodes: [{ id: "n", type: "image", data: {} }] }, -1);
+  const result = await Promise.allSettled([claims.module.claimGeneration("c", "n", "a"), claims.module.claimGeneration("c", "n", "b")]);
+  assert.equal(result.filter(item => item.status === "fulfilled").length, 1);
+  const active = (await store.module.loadCanvas("c")).generationClaims.n.id;
+  await claims.module.finishGeneration("c", "n", "wrong", "completed");
+  assert.equal((await store.module.loadCanvas("c")).generationClaims.n.id, active);
+  await claims.module.finishGeneration("c", "n", active, "unknown");
+  await assert.rejects(claims.module.claimGeneration("c", "n", "next"), /未确认/);
+  await claims.module.finishGeneration("c", "n", active, "completed");
+  await claims.module.claimGeneration("c", "n", "next");
+});
+test("服务重启后无任务 ID 的占用标为未知，有视频任务 ID 的占用保持可恢复", async () => {
+  const doc = { ...store.module.emptyCanvas("restart"), nodes: [{ id: "i", type: "image", data: {} }, { id: "v", type: "video", data: {} }], generationClaims: { i: { id: "old-image", state: "pending" }, v: { id: "video", state: "pending", taskId: "task" } } };
+  await store.module.saveCanvas(doc, -1);
+  const recovered = await claims.module.recoverStaleGenerationClaims("restart");
+  assert.equal(recovered.generationClaims.i.state, "unknown");
+  assert.equal(recovered.generationClaims.v.state, "pending");
+  await assert.rejects(claims.module.acknowledgeUnknownGeneration("restart", "i", "wrong"), /状态已变化/);
+  await claims.module.acknowledgeUnknownGeneration("restart", "i", "old-image");
+  await claims.module.claimGeneration("restart", "i", "new-image");
+});
+test("重复申请同一 ID 不会把仍在运行的任务误判为未知", async () => {
+  await store.module.saveCanvas({ ...store.module.emptyCanvas("live"), nodes: [{ id: "n", type: "image", data: {} }] }, -1);
+  await claims.module.claimGeneration("live", "n", "same");
+  await assert.rejects(claims.module.claimGeneration("live", "n", "same"), /正在进行/);
+  const doc = await claims.module.recoverStaleGenerationClaims("live");
+  assert.equal(doc.generationClaims.n.state, "pending");
+});

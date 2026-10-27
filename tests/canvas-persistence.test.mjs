@@ -2,6 +2,7 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { loadTypescript } from "./helpers/load-typescript.mjs";
 const loaded = await loadTypescript("lib/canvas-persistence.ts"); after(loaded.dispose);
+const operationModule = await loadTypescript("lib/canvas-operations.ts"); after(operationModule.dispose);
 const { persistImageOutcome, persistVideoOutcome } = loaded.module;
 const initial = () => ({ id: "a", name: "A", revision: 1, createdAt: "2026-10-25T00:00:00Z", viewport: { x: 0, y: 0, zoom: 1 }, edges: [], nodes: [{ id: "n", type: "image", data: { generationId: "g" } }], libraryAssets: [{ assetName: "old.png", name: "old", sources: ["imported"], addedAt: "2026-10-25T00:00:00Z" }] });
 const outcome = { kind: "result", generationId: "g", retrySlotId: null, prompt: "p", slots: [{ status: "success", asset: { name: "new.png" } }] };
@@ -14,7 +15,8 @@ function harness(doc = initial(), conflict = false) {
     if (!init?.method) { assert.ok(String(url).includes("background=1")); return new Response(JSON.stringify(value)); }
     const body = JSON.parse(init.body); puts++;
     if (conflict && puts === 1) { value.name = "用户的新标题"; value.revision++; return new Response(null, { status: 409 }); }
-    value = { ...body, revision: value.revision + 1 };
+    assert.equal(init.method, "POST");
+    value = { ...operationModule.module.applyCanvasOperations(value, body.operations), revision: value.revision + 1 };
     return new Response(JSON.stringify(value));
   } };
 }
@@ -43,7 +45,7 @@ test("过期图片任务仍入库，但不能覆盖较新的任务状态", async
 });
 test("回写磁盘失败明确抛错，不伪装保存成功", async () => {
   const h = harness();
-  await assert.rejects(persistImageOutcome("a", "n", outcome, { fetch: (url, init) => init.method === "PUT" ? Promise.resolve(new Response(null, { status: 500 })) : h.fetch(url, init) }), /写回原画布失败/);
+  await assert.rejects(persistImageOutcome("a", "n", outcome, { fetch: (url, init) => init.method === "POST" ? Promise.resolve(new Response(null, { status: 500 })) : h.fetch(url, init) }), /写回原画布失败/);
 });
 test("整张画布删除后不发送PUT", async () => {
   await persistImageOutcome("a", "n", outcome, { fetch: async (_url, init) => { assert.equal(init.method, undefined); return new Response(null, { status: 404 }); } });
@@ -55,4 +57,12 @@ test("后台视频回写保留图片目录，不将mp4放入库", async () => {
   assert.deepEqual(h.current().libraryAssets.map(a => a.assetName), ["old.png"]);
   assert.equal(h.current().nodes[0].data.assetName, "video.mp4");
   assert.equal(h.current().nodes[0].data.status, "idle");
+});
+test("旧视频任务结果不能覆盖较新的任务", async () => {
+  const doc = initial();
+  doc.nodes = [{ id: "n", type: "video", data: { generationId: "new", status: "running" } }];
+  const h = harness(doc);
+  await persistVideoOutcome("a", "n", { taskId: "old", generationId: "old", requestId: "r", canvasId: "a", nodeId: "n", status: "completed", waitedSeconds: 2, result: { assetName: "old.mp4", localUrl: "/api/assets/old.mp4", bytes: 42 }, error: null }, h);
+  assert.equal(h.current().nodes[0].data.status, "running");
+  assert.equal(h.calls.length, 1);
 });

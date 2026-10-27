@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { fitFloatingRect } from "@/lib/floating-placement";
 import { isAssetDrag, readAssetDrag } from "@/lib/asset-drag";
 import { insertReferenceToken, referencePattern, referenceToken, type PromptReference } from "@/lib/prompt-references";
+import { useEditLease } from "./use-edit-lease";
 
 function serialize(root: Node): string {
   if (root instanceof HTMLElement && root.dataset.asset) return referenceToken(root.dataset.asset);
@@ -50,6 +51,7 @@ export function PromptEditor({ nodeId, value, references, suggestions = referenc
   onBrowse?: (select: (item: PromptReference) => boolean, close: () => void) => void;
   onCommit: (value: string) => void; onSubmit: (value: string) => void;
 }) {
+  const lease = useEditLease(nodeId, "prompt");
   const editor = useRef<HTMLDivElement>(null);
   const composing = useRef(false);
   const receivedValue = useRef<string | null>(null);
@@ -272,6 +274,7 @@ export function PromptEditor({ nodeId, value, references, suggestions = referenc
       {dropping ? "松开即可引用这张图片" : placeholder ?? "描述你想生成的画面，输入 @ 引用画布素材"}
     </div>}
     <div ref={editor} contentEditable={!readOnly} aria-readonly={readOnly || undefined} suppressContentEditableWarning role="textbox" aria-label="生成描述" aria-multiline="true"
+      onFocus={lease.onFocus}
       aria-expanded={popupOpen} aria-controls={popupOpen ? `references-${nodeId}` : undefined}
       aria-activedescendant={popupOpen && (options[active] || (onBrowse && active === options.length)) ? `reference-${nodeId}-${active}` : undefined}
       className={`ui-prompt-editor max-h-60 min-h-24 overflow-y-auto whitespace-pre-wrap break-words px-1 py-2 text-base outline-none ${dropping ? "bg-accent/40 ring-1 ring-inset ring-foreground/30" : ""}`}
@@ -305,7 +308,7 @@ export function PromptEditor({ nodeId, value, references, suggestions = referenc
         else detect();
       }}
       onKeyUp={(event) => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) && !composing.current) detect(); }}
-      onBlur={() => setQuery(null)}
+      onBlur={() => { setQuery(null); lease.onBlur(); }}
       onPaste={(event) => {
         event.preventDefault();
         if (readOnly) return;

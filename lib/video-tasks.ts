@@ -40,6 +40,8 @@ export type VideoTaskRecord = {
   status: VideoTaskStatus;
   canvasId: string;
   nodeId: string;
+  claim?: { nodeId: string; id: string };
+  claimReleased?: boolean;
   /** 提交时的冻结快照：上游图片随后就绪只影响下一次提交 */
   snapshot: VideoRequestPlan;
   /** 上游返回结果后记录临时链接，供 save_failed 重试下载 */
@@ -69,6 +71,7 @@ export async function createVideoTask(
   canvasId: string,
   nodeId: string,
   snapshot: VideoRequestPlan,
+  claim?: { nodeId: string; id: string },
 ): Promise<VideoTaskRecord> {
   const now = new Date().toISOString();
   const record: VideoTaskRecord = {
@@ -78,6 +81,7 @@ export async function createVideoTask(
     status: "pending",
     canvasId,
     nodeId,
+    ...(claim ? { claim } : {}),
     snapshot,
     remoteUrl: null,
     result: null,
@@ -100,7 +104,7 @@ export async function readVideoTask(taskId: string): Promise<VideoTaskRecord | n
 
 export async function updateVideoTask(
   taskId: string,
-  patch: Partial<Pick<VideoTaskRecord, "status" | "remoteUrl" | "result" | "error">>,
+  patch: Partial<Pick<VideoTaskRecord, "status" | "remoteUrl" | "result" | "error" | "claimReleased">>,
 ): Promise<VideoTaskRecord> {
   const record = await readVideoTask(taskId);
   if (!record) throw new Error(`视频任务不存在：${taskId}`);
@@ -133,5 +137,5 @@ export async function listVideoTasks(): Promise<VideoTaskRecord[]> {
 
 /** 服务重启后需要恢复的任务：轮询中，或已出片但下载失败。 */
 export async function recoverableVideoTasks(): Promise<VideoTaskRecord[]> {
-  return (await listVideoTasks()).filter((record) => record.status === "pending" || record.status === "save_failed");
+  return (await listVideoTasks()).filter((record) => record.status === "pending" || record.status === "save_failed" || (Boolean(record.claim) && !record.claimReleased && isTerminalVideoTask(record)));
 }

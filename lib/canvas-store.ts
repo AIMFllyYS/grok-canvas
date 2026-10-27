@@ -27,6 +27,15 @@ async function withCanvasLock<T>(id: string, action: () => Promise<T>): Promise<
   }
 }
 
+/** Coordinate short-lived per-field leases with canvas mutations. */
+export async function withExistingCanvas<T>(id: string, action: (doc: CanvasDoc) => T): Promise<T | null> {
+  return withCanvasLock(id, async () => {
+    if (deletedIds.has(id)) return null;
+    const doc = await loadCanvas(id);
+    return doc ? action(doc) : null;
+  });
+}
+
 /**
  * 原子替换目标文件。Windows 上并发 rename 或目标被短暂占用会返回 EPERM/EBUSY，
  * 短暂重试即可成功，不需放宽原子性。
@@ -62,6 +71,9 @@ export type CanvasDoc = {
   nodes: unknown[];
   edges: unknown[];
   libraryAssets?: CanvasLibraryAsset[];
+  /** Durable operation IDs allow safe retry after a lost response. */
+  appliedOperationIds?: string[];
+  generationClaims?: Record<string, { id: string; state: "pending" | "unknown"; taskId?: string }>;
 };
 
 export function isSafeCanvasId(id: string): boolean {
@@ -118,17 +130,35 @@ export async function saveCanvas(
     const current = await loadCanvas(doc.id);
     const currentRevision = current?.revision ?? -1;
     if (currentRevision !== expectedRevision) return null;
-    let libraryAssets = mergeLibraryAssets(normalizeLibraryAssets(current?.libraryAssets), normalizeLibraryAssets(doc.libraryAssets));
-    libraryAssets = mergeLibraryAssets(libraryAssets, collectCanvasAssets(doc.nodes, doc.createdAt, libraryAssets));
-    const next: CanvasDoc = { ...doc, libraryAssets, revision: currentRevision + 1, updatedAt: new Date().toISOString() };
-    const file = canvasPath(doc.id);
-    await mkdir(CANVASES_DIR, { recursive: true });
-    const tmp = `${file}.${crypto.randomUUID()}.tmp`;
-    try {
-      await writeFile(tmp, `${JSON.stringify(next)}\n`, "utf8");
-      await renameWithRetry(tmp, file);
-    } finally { await unlink(tmp).catch(() => {}); }
-    return next;
+    return writeCanvas(doc, current, currentRevision);
+  });
+}
+
+async function writeCanvas(doc: Omit<CanvasDoc, "revision" | "updatedAt">, current: CanvasDoc | null, revision: number): Promise<CanvasDoc> {
+  let libraryAssets = mergeLibraryAssets(normalizeLibraryAssets(current?.libraryAssets), normalizeLibraryAssets(doc.libraryAssets));
+  libraryAssets = mergeLibraryAssets(libraryAssets, collectCanvasAssets(doc.nodes, doc.createdAt, libraryAssets));
+  const appliedOperationIds = [...new Set([...(current?.appliedOperationIds ?? []), ...(doc.appliedOperationIds ?? [])])];
+  const generationClaims = doc.generationClaims ?? current?.generationClaims;
+  const next: CanvasDoc = { ...doc, ...(generationClaims ? { generationClaims } : {}), ...(appliedOperationIds.length ? { appliedOperationIds } : {}), libraryAssets, revision: revision + 1, updatedAt: new Date().toISOString() };
+  const file = canvasPath(doc.id);
+  await mkdir(CANVASES_DIR, { recursive: true });
+  const tmp = `${file}.${crypto.randomUUID()}.tmp`;
+  try {
+    await writeFile(tmp, `${JSON.stringify(next)}\n`, "utf8");
+    await renameWithRetry(tmp, file);
+  } finally { await unlink(tmp).catch(() => {}); }
+  return next;
+}
+
+/** Run a synchronous edit against the latest canvas under the same lock as saves and deletes. */
+export async function updateCanvas(id: string, edit: (doc: CanvasDoc) => void | false): Promise<CanvasDoc | null> {
+  return withCanvasLock(id, async () => {
+    if (deletedIds.has(id)) return null;
+    const current = await loadCanvas(id);
+    if (!current) return null;
+    const next = structuredClone(current);
+    if (edit(next) === false) return current;
+    return writeCanvas(next, current, current.revision);
   });
 }
 
@@ -187,8 +217,9 @@ async function writeLastCanvasId(id: string): Promise<void> {
 }
 
 /** Delete a canvas file. Returns false when it did not exist. Assets are untouched. */
-export async function deleteCanvas(id: string): Promise<boolean> {
+export async function deleteCanvas(id: string, canDelete?: () => boolean): Promise<boolean> {
   return withCanvasLock(id, async () => {
+    if (canDelete && !canDelete()) throw new Error("画布 Agent 正在运行，请先停止");
     try {
       await unlink(canvasPath(id));
       deletedIds.add(id);

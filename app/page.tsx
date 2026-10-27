@@ -12,7 +12,7 @@ import { StatusFeedback } from "@/components/ui/status-feedback";
 import { ProjectMark } from "@/components/ui/project-mark";
 import type { ImageNodeData } from "@/components/canvas/image-node";
 import type { CanvasDoc, CanvasSummary } from "@/lib/canvas-store";
-import { normalizeNodeResults, parseGenerationCount } from "@/lib/multi-image";
+import { normalizeNodeResults, parseGenerationCount, UNCONFIRMED_RESULT_MESSAGE } from "@/lib/multi-image";
 import type { CanvasSaveStatus } from "@/lib/save-status";
 import { WorkspacePreferencesProvider } from "@/components/workspace-preferences";
 import { collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets } from "@/lib/canvas-library";
@@ -31,21 +31,28 @@ const AUTH_RESULT_TEXT: Record<string, string> = {
 };
 
 function normalizeDoc(loaded: CanvasDoc): CanvasDoc {
-  // 刷新后不恢复"生成中"状态：MVP 任务不跨页面存活
+  // 保留服务端确认仍在运行的任务；状态未确认时提示用户检查结果。
   // 图片节点顺带规范化候选/主图/数量（旧节点 assetName 解释为唯一成功槽）
-  loaded.nodes = (loaded.nodes as Array<{ type?: string; data?: ImageNodeData }>).map((node) => {
+  loaded.nodes = (loaded.nodes as Array<{ id?: string; type?: string; data?: ImageNodeData }>).map((node) => {
     if (!node.data) {
       return node;
     }
+    const ownClaim = loaded.generationClaims?.[node.id ?? ""];
+    const sourceClaim = typeof node.data.sourceNodeId === "string" ? loaded.generationClaims?.[node.data.sourceNodeId] : undefined;
+    const claim = ownClaim ?? (sourceClaim?.id === node.data.generationId ? sourceClaim : undefined);
+    const status = claim?.state === "pending" ? "running" : claim?.state === "unknown" ? "failed" : "idle";
+    const error = claim?.state === "unknown" ? { errorMessage: UNCONFIRMED_RESULT_MESSAGE } : {};
     if (node.type !== "image") {
-      return { ...node, data: { ...node.data, status: "idle" } };
+      return { ...node, selected: false, data: { ...node.data, status, ...error } };
     }
     const normalized = normalizeNodeResults(node.data);
     return {
       ...node,
+      selected: false,
       data: {
         ...node.data,
-        status: "idle",
+        status,
+        ...error,
         results: normalized.results,
         primaryResultId: normalized.primaryResultId,
         assetName: normalized.assetName,
@@ -55,6 +62,7 @@ function normalizeDoc(loaded: CanvasDoc): CanvasDoc {
   });
   loaded.edges = (loaded.edges as Array<{ type?: string }>).map((edge) => ({
     ...edge,
+    selected: false,
     type: "scissor",
   }));
   const knownAssets = normalizeLibraryAssets(loaded.libraryAssets);
@@ -69,14 +77,17 @@ export default function Home() {
 }
 
 function Workspace() {
-  const [agentBusy, setAgentBusy] = useState(false);
-  const [canvasVersion, setCanvasVersion] = useState(0);
+  const [agentIds, setAgentIds] = useState<string[]>([]);
+  const [busyAgents, setBusyAgents] = useState<Record<string, boolean>>({});
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveRetrying, setSaveRetrying] = useState(false);
   const [doc, setDoc] = useState<CanvasDoc | null>(null);
   const [canvases, setCanvases] = useState<CanvasSummary[]>([]);
   const flushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const canvasBaselines = useRef(new Map<string, CanvasDoc>());
+  const currentCanvasRef = useRef<string | undefined>(undefined);
+  currentCanvasRef.current = doc?.id;
   const transitionRef = useRef(false);
   const [transitioning, setTransitioning] = useState(false);
   const transition = async (action: () => Promise<void>) => {
@@ -95,7 +106,9 @@ function Workspace() {
     if (!response.ok) {
       throw new Error(String(response.status));
     }
-    setDoc(normalizeDoc((await response.json()) as CanvasDoc));
+    const loaded = (await response.json()) as CanvasDoc;
+    canvasBaselines.current.set(id, structuredClone(loaded));
+    setDoc(normalizeDoc(loaded));
   }, []);
 
   const loadWorkspace = useCallback(async () => {
@@ -131,6 +144,7 @@ function Workspace() {
   useEffect(() => {
     setSaveError(null);
     setSaveRetrying(false);
+    if (doc?.id) setAgentIds(ids => ids.includes(doc.id) ? ids : [...ids, doc.id]);
   }, [doc?.id]);
 
   // 切换/新建前必须把当前画布待保存的修改落盘，失败则留在当前画布
@@ -166,7 +180,9 @@ function Workspace() {
       if (!response.ok) {
         throw new Error(String(response.status));
       }
-      const created = normalizeDoc((await response.json()) as CanvasDoc);
+      const loaded = (await response.json()) as CanvasDoc;
+      canvasBaselines.current.set(loaded.id, structuredClone(loaded));
+      const created = normalizeDoc(loaded);
       setCanvases((current) => [
         { id: created.id, name: created.name, createdAt: created.createdAt, updatedAt: created.updatedAt },
         ...current,
@@ -186,6 +202,7 @@ function Workspace() {
   };
 
   const deleteCanvasById = async (id: string) => {
+    if (busyAgents[id]) { toast.error("请先停止该画布正在运行的 Agent"); return; }
     if (doc?.id === id && !(await flushCurrent())) {
       toast.error("当前画布尚未保存，无法删除");
       return;
@@ -201,6 +218,7 @@ function Workspace() {
     }
     const remaining = canvases.filter((item) => item.id !== id);
     setCanvases(remaining);
+    setAgentIds(ids => ids.filter(item => item !== id));
     if (doc && id === doc.id) {
       if (remaining[0]) {
         try {
@@ -225,7 +243,7 @@ function Workspace() {
 
   return (
     <div className="fixed inset-0 flex flex-col overflow-hidden">
-      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4" inert={agentBusy}>
+      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4">
         {/* 名称区约占顶栏 1/4 宽；上限放在顶栏这一层，百分比才按顶栏宽度算，
             放进里面的子元素会让 max-w 相对收缩成很小的值，长名字只剩两三个字。 */}
         <div className="flex min-w-0 max-w-[25%] items-center gap-2.5">
@@ -256,16 +274,21 @@ function Workspace() {
         </div>
       ) : null}
       {transitioning && <div role="status" className="border-b px-4 py-1 text-center text-xs text-muted-foreground">正在完成导入并保存画布…</div>}
-      <main className="min-h-0 flex-1" inert={transitioning || agentBusy}>
+      <main className="min-h-0 flex-1" inert={transitioning}>
         {doc ? (
           <ReactFlowProvider>
             <FlowCanvas
-              key={`${doc.id}:${canvasVersion}`}
+              key={doc.id}
               doc={doc}
+              baseline={canvasBaselines.current.get(doc.id) ?? doc}
               onRegisterFlush={(flush) => {
                 flushRef.current = flush;
               }}
               onSaveStatus={handleSaveStatus}
+              onRestoreName={name => {
+                setDoc(current => current?.id === doc.id ? { ...current, name } : current);
+                setCanvases(current => current.map(item => item.id === doc.id ? { ...item, name } : item));
+              }}
             />
           </ReactFlowProvider>
         ) : (
@@ -274,7 +297,9 @@ function Workspace() {
           </div>
         )}
       </main>
-      {doc && <CanvasAgent key={doc.id} canvasId={doc.id} beforeSend={async () => (await flushRef.current?.()) ?? true} onBusy={setAgentBusy} onSettled={async () => { await openCanvas(doc.id); setCanvasVersion(v => v + 1); }}/>}
+      {agentIds.map(id => <div key={id} hidden={id !== doc?.id}>
+        <CanvasAgent canvasId={id} beforeSend={async () => currentCanvasRef.current === id && ((await flushRef.current?.()) ?? true)} onBusy={busy => setBusyAgents(current => current[id] === busy ? current : { ...current, [id]: busy })} onSettled={async () => { if (currentCanvasRef.current === id) await flushRef.current?.(); }}/>
+      </div>)}
     </div>
   );
 }

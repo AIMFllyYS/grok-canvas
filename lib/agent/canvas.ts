@@ -1,7 +1,9 @@
-import { loadCanvas, saveCanvas, type CanvasDoc } from "../canvas-store";
+import { loadCanvas, updateCanvas, type CanvasDoc } from "../canvas-store";
 import { resolveCanvasReferences } from "../canvas-references";
 import { placeNewNode } from "../node-placement";
 import { AgentError } from "./store";
+import { diffCanvasOperations } from "../canvas-operations";
+import { editLeaseActive } from "../canvas-edit-leases";
 // The standard media-node reference is 280 canvas units.
 export const AGENT_TEXT_MAX_WIDTH = 560;
 export const AGENT_TEXT_MAX_HEIGHT = 1120;
@@ -26,10 +28,16 @@ export async function readCanvas(id: string) {
   return c;
 }
 export async function mutateCanvas(id: string, edit: (doc: CanvasDoc) => void) {
-  const c = await readCanvas(id);
-  edit(c);
-  const saved = await saveCanvas(c, c.revision);
-  if (!saved) throw new AgentError("画布已更新，请重新读取后操作", 409);
+  const saved = await updateCanvas(id, (doc) => {
+    const before = structuredClone(doc);
+    edit(doc);
+    for (const op of diffCanvasOperations(before, doc)) {
+      if (op.target !== "node" || !op.entityId) continue;
+      const fields = op.path.length === 0 ? ["content", "prompt"] : op.path[0] === "data" ? [op.path[1]] : [];
+      for (const field of fields) if ((field === "content" || field === "prompt") && editLeaseActive(id, op.entityId, field)) throw new AgentError("用户正在编辑该节点内容，请稍后重试", 409);
+    }
+  });
+  if (!saved) throw new AgentError("画布不存在", 404);
   return saved;
 }
 export function addNodes(

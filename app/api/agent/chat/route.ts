@@ -10,6 +10,7 @@ import { saveConversation } from "@/lib/agent/conversations";
 import { finalizeInterruptedMessages } from "@/lib/agent/messages";
 import { validateAgentSettings } from "@/lib/agent/model-catalog";
 import { agentError } from "@/lib/agent/http";
+import { withExistingCanvas } from "@/lib/canvas-store";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 600;
@@ -23,7 +24,8 @@ export async function POST(request: Request) {
         messages: z.array(z.unknown()).min(1).max(3000),
       })
       .parse(await request.json());
-    release = acquireAgent(canvasId);
+    release = (await withExistingCanvas(canvasId, () => acquireAgent(canvasId))) ?? undefined;
+    if (!release) throw new AgentError("画布不存在", 404);
     const state = await updateAgent(canvasId);
     const chat = state.conversations.find((c) => c.id === conversationId);
     if (!chat) throw new AgentError("对话不存在", 404);

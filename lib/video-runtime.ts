@@ -10,6 +10,7 @@ export type VideoTaskView = {
   requestId: string;
   canvasId: string;
   nodeId: string;
+  generationId?: string;
   status: "pending" | "completed" | "failed" | "save_failed" | "expired";
   waitedSeconds: number;
   result: { assetName: string; localUrl: string; bytes: number } | null;
@@ -29,6 +30,7 @@ export type VideoSubmitBody = {
   prompt: string;
   canvasId: string;
   nodeId: string;
+  claim?: { nodeId: string; id: string };
   inputs?: VideoInput[];
   parameters: Omit<VideoGenerationRequest, "inputs">;
 };
@@ -101,6 +103,7 @@ export async function submitVideoJob(
   if (!response.ok || typeof payload.taskId !== "string" || typeof payload.requestId !== "string") {
     const error = new Error(payload.error?.message ?? `请求失败 (${response.status})`);
     (error as Error & { kind?: string }).kind = payload.error?.kind;
+    (error as Error & { status?: number }).status = response.status;
     throw error;
   }
   return { taskId: payload.taskId, requestId: payload.requestId };

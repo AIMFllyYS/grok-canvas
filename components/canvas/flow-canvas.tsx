@@ -31,6 +31,9 @@ import { useWorkspacePreferences } from "../workspace-preferences";
 import { interactionConfig, interactionShortcut, type InteractionMode } from "@/lib/canvas-interaction";
 import { assetsFromOutcome, collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets, type CanvasLibraryAsset, type CanvasLibrarySource } from "@/lib/canvas-library";
 import { canvasSaveBody } from "@/lib/canvas-document";
+import { applyCanvasOperations, diffCanvasOperations, readCanvasOperationValue, type CanvasOperation } from "@/lib/canvas-operations";
+import { generationClaim } from "@/lib/generation-claim-client";
+import { canvasDraftKey, clearCanvasDraft, loadCanvasDraft, saveCanvasDraft } from "@/lib/canvas-drafts";
 import { persistImageOutcome, persistVideoOutcome } from "@/lib/canvas-persistence";
 import { addFixedReferences, resolveCanvasReferences } from "@/lib/canvas-references";
 import { uploadAssets, type UploadProgress, type UploadedAsset } from "@/lib/asset-upload";
@@ -150,6 +153,8 @@ type GenerateVideoOverrides = {
 };
 
 type CanvasActions = {
+  canvasId: string;
+  flushEdits: () => Promise<boolean>;
   generate: (nodeId: string, overrides?: GenerateOverrides) => void;
   generateVideo: (nodeId: string, overrides?: GenerateVideoOverrides) => void;
   setPrimaryResult: (nodeId: string, slotId: string) => void;
@@ -164,6 +169,8 @@ type CanvasActions = {
 };
 
 const CanvasActionsContext = createContext<CanvasActions>({
+  canvasId: "",
+  flushEdits: async () => false,
   generate: () => {},
   generateVideo: () => {},
   setPrimaryResult: () => {},
@@ -207,6 +214,12 @@ type UndoEntry =
       prev: { primaryResultId: string | null; assetName: string | null };
       next: { primaryResultId: string | null; assetName: string | null };
     };
+
+function undoTargets(entry: UndoEntry): string[] {
+  if (entry.type === "move") return entry.items.map(item => `node:${item.id}`);
+  if (entry.type === "setPrimary") return [`node:${entry.nodeId}`];
+  return [...entry.nodes.map(node => `node:${node.id}`), ...entry.edges.map(edge => `edge:${edge.id}`)];
+}
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -255,12 +268,16 @@ function freeSpotRightOf(origin: { x: number; y: number }, nodes: Node[]): { x: 
 
 export function FlowCanvas({
   doc,
+  baseline,
   onRegisterFlush,
   onSaveStatus,
+  onRestoreName,
 }: {
   doc: CanvasDoc;
+  baseline: CanvasDoc;
   onRegisterFlush?: (flush: () => Promise<boolean>) => void;
   onSaveStatus?: (status: CanvasSaveStatus) => void;
+  onRestoreName?: (name: string) => void;
 }) {
   const desktopAvailable = useDesktopAvailable();
   const { resolvedTheme } = useTheme();
@@ -268,6 +285,7 @@ export function FlowCanvas({
   const [mode, setMode] = useState<InteractionMode>("select");
   const [dragging, setDragging] = useState(false);
   const [libraryAssets, setLibraryAssets] = useState(() => normalizeLibraryAssets(doc.libraryAssets));
+  const [generationClaims, setGenerationClaims] = useState(() => doc.generationClaims ?? {});
   const libraryRef = useRef(libraryAssets);
   const [uploads, setUploads] = useState<UploadProgress[]>([]);
   const pendingUploads = useRef(new Set<Promise<unknown>>());
@@ -325,7 +343,7 @@ export function FlowCanvas({
     setPanelNodeId(selectedNodes.length === 1 ? (selectedNodes[0]?.id ?? null) : null);
   }, [closeCandidates]);
   const [minimapOpen, setMinimapOpen] = useState(false);
-  const { screenToFlowPosition, updateNodeData, zoomIn, zoomOut, zoomTo } = useReactFlow();
+  const { screenToFlowPosition, updateNodeData, zoomIn, zoomOut, zoomTo, setViewport } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const libraryUploadInputRef = useRef<HTMLInputElement>(null);
@@ -337,17 +355,38 @@ export function FlowCanvas({
   const menuOpenedAtRef = useRef(0);
   const undoStackRef = useRef<UndoEntry[]>([]);
   const redoStackRef = useRef<UndoEntry[]>([]);
+  const remoteClockRef = useRef(new Map<string, number>());
+  const undoClockRef = useRef(new WeakMap<UndoEntry, Map<string, number>>());
+  const pushUndo = useCallback((entry: UndoEntry) => {
+    undoClockRef.current.set(entry, new Map(undoTargets(entry).map(key => [key, remoteClockRef.current.get(key) ?? 0])));
+    undoStackRef.current.push(entry);
+  }, []);
+  const undoStillValid = (entry: UndoEntry) => {
+    const clock = undoClockRef.current.get(entry);
+    return clock && undoTargets(entry).every(key => (clock.get(key) ?? 0) === (remoteClockRef.current.get(key) ?? 0));
+  };
   const clipboardRef = useRef<{ nodes: Node[]; edges: Edge[] } | null>(null);
 
   // 新建类操作入撤销栈（新建节点/上传/粘贴/连线）
   const pushAdd = useCallback((addedNodes: Node[], addedEdges: Edge[]) => {
-    undoStackRef.current.push({ type: "add", nodes: addedNodes, edges: addedEdges });
+    pushUndo({ type: "add", nodes: addedNodes, edges: addedEdges });
     redoStackRef.current = [];
-  }, []);
+  }, [pushUndo]);
   const dragStartRef = useRef<Array<{ id: string; x: number; y: number }>>([]);
 
   const revisionRef = useRef(doc.revision);
+  const acknowledgedRef = useRef<CanvasDoc>(baseline);
+  const inFlightOperationsRef = useRef<{ base: CanvasDoc; snapshot: CanvasDoc; operations: CanvasOperation[] } | null>(null);
+  const draftKeyRef = useRef("");
+  const draftReadyRef = useRef(false);
+  const [draftReady, setDraftReady] = useState(false);
+  const docRef = useRef(doc);
+  docRef.current = doc;
+  const onRestoreNameRef = useRef(onRestoreName);
+  onRestoreNameRef.current = onRestoreName;
   const viewportRef = useRef<Viewport>(doc.viewport);
+  const viewportDirtyRef = useRef(false);
+  const viewportVersionRef = useRef(0);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savingRef = useRef(false);
   const saveOkRef = useRef(true);
@@ -367,40 +406,115 @@ export function FlowCanvas({
 
   // ---- 持久化：500ms 防抖自动保存 ----
   const save = useCallback(async () => {
-    if (savingRef.current) {
+    if (savingRef.current || !draftReadyRef.current) {
       return;
     }
     savingRef.current = true;
     const version = dirtyVersion.current;
+    const viewportVersion = viewportVersionRef.current;
     try {
-      const response = await fetch(`/api/canvases/${doc.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(canvasSaveBody(doc, {
-          revision: revisionRef.current,
-          viewport: viewportRef.current,
-          nodes: latestRef.current.nodes,
-          edges: latestRef.current.edges,
-          libraryAssets: libraryRef.current,
-        })),
+      const snapshot = canvasSaveBody(docRef.current, {
+        revision: revisionRef.current,
+        viewport: viewportDirtyRef.current ? viewportRef.current : acknowledgedRef.current.viewport,
+        nodes: latestRef.current.nodes,
+        edges: latestRef.current.edges,
+        libraryAssets: libraryRef.current,
       });
-      const payload = (await response.json()) as CanvasDoc & { error?: { message: string } };
-      if (response.ok) {
-        revisionRef.current = payload.revision;
+      let batch = inFlightOperationsRef.current ?? {
+        base: acknowledgedRef.current,
+        snapshot,
+        operations: diffCanvasOperations(acknowledgedRef.current, snapshot),
+      };
+      if (batch.operations.length) {
+        inFlightOperationsRef.current = batch;
+        await saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: acknowledgedRef.current, working: snapshot, pending: batch });
+      }
+      let response = batch.operations.length
+        ? await fetch(`/api/canvases/${doc.id}/operations`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ operations: batch.operations }),
+          })
+        : await fetch(`/api/canvases/${doc.id}?background=1&sinceRevision=${acknowledgedRef.current.revision}`, { cache: "no-store" });
+      if (response.status === 304) {
         savedVersion.current = version;
+        if (dirtyVersion.current === version) await clearCanvasDraft(draftKeyRef.current);
+        reportSave({ ok: true });
+        return;
+      }
+      let payload = (await response.json()) as CanvasDoc & { error?: { message: string; operationId?: string } };
+      // A user's active text draft wins over an Agent edit that reached disk first.
+      for (let attempt = 0; response.status === 409 && attempt < 20; attempt++) {
+        const conflict = batch.operations.find(op => op.id === payload.error?.operationId);
+        if (!conflict || conflict.target !== "node" || conflict.path.length !== 2 || conflict.path[0] !== "data" || !["content", "prompt", "draftPrompt"].includes(conflict.path[1]!)) break;
+        const latestResponse = await fetch(`/api/canvases/${doc.id}?background=1`, { cache: "no-store" });
+        if (!latestResponse.ok) break;
+        const latest = await latestResponse.json() as CanvasDoc;
+        const before = readCanvasOperationValue(latest, conflict);
+        if (!before) break;
+        batch = { ...batch, operations: batch.operations.map(op => op.id === conflict.id ? { ...op, id: crypto.randomUUID(), before } : op) };
+        inFlightOperationsRef.current = batch;
+        const working = canvasSaveBody(docRef.current, { viewport: viewportDirtyRef.current ? viewportRef.current : acknowledgedRef.current.viewport, nodes: latestRef.current.nodes, edges: latestRef.current.edges, libraryAssets: libraryRef.current });
+        await saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: acknowledgedRef.current, working, pending: batch });
+        response = await fetch(`/api/canvases/${doc.id}/operations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operations: batch.operations }) });
+        payload = await response.json() as typeof payload;
+      }
+      if (response.ok) {
+        for (const operation of diffCanvasOperations(batch.snapshot, payload)) {
+          if (operation.target === "canvas" || !operation.entityId) continue;
+          const mark = (key: string) => remoteClockRef.current.set(key, (remoteClockRef.current.get(key) ?? 0) + 1);
+          mark(`${operation.target}:${operation.entityId}`);
+          if (operation.target === "edge") {
+            const edge = [...batch.snapshot.edges, ...payload.edges].find(item => (item as Edge).id === operation.entityId) as Edge | undefined;
+            if (edge) { mark(`node:${edge.source}`); mark(`node:${edge.target}`); }
+          }
+        }
+        const current = canvasSaveBody(docRef.current, { viewport: viewportDirtyRef.current ? viewportRef.current : acknowledgedRef.current.viewport, nodes: latestRef.current.nodes, edges: latestRef.current.edges, libraryAssets: libraryRef.current });
+        const pending = diffCanvasOperations(batch.snapshot, current);
+        const reconciled = pending.length ? applyCanvasOperations(payload, pending) : payload;
+        const currentNodes = new Map(latestRef.current.nodes.map(node => [node.id, node]));
+        const currentEdges = new Map(latestRef.current.edges.map(edge => [edge.id, edge]));
+        const mergedNodes = (reconciled.nodes as Node[]).map(node => {
+          const previous = currentNodes.get(node.id);
+          const claimId = typeof node.data.sourceNodeId === "string" ? node.data.sourceNodeId : node.id;
+          const claim = payload.generationClaims?.[claimId];
+          const data = claim?.state === "unknown" && node.data.generationId === claim.id
+            ? { ...node.data, status: "failed", errorMessage: UNCONFIRMED_RESULT_MESSAGE, errorKind: "network" }
+            : node.data;
+          return previous ? { ...node, data, selected: previous.selected, dragging: previous.dragging, measured: previous.measured } : { ...node, data, selected: false };
+        });
+        const mergedEdges = (reconciled.edges as Edge[]).map(edge => ({ ...edge, type: "scissor", selected: currentEdges.get(edge.id)?.selected }));
+        acknowledgedRef.current = payload;
+        if (reconciled.name !== docRef.current.name) onRestoreNameRef.current?.(reconciled.name);
+        setGenerationClaims(payload.generationClaims ?? {});
+        inFlightOperationsRef.current = null;
+        revisionRef.current = payload.revision;
+        if (viewportVersionRef.current === viewportVersion) viewportDirtyRef.current = false;
+        savedVersion.current = version;
+        const nodesChanged = JSON.stringify(mergedNodes) !== JSON.stringify(latestRef.current.nodes);
+        const edgesChanged = JSON.stringify(mergedEdges) !== JSON.stringify(latestRef.current.edges);
+        latestRef.current = { nodes: mergedNodes, edges: mergedEdges };
+        if (mounted.current) {
+          if (nodesChanged) setNodes(mergedNodes);
+          if (edgesChanged) setEdges(mergedEdges);
+        }
+        if (dirtyVersion.current === version) await clearCanvasDraft(draftKeyRef.current);
+        else await saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: payload, working: current, pending: null });
         const merged = mergeLibraryAssets(libraryRef.current, normalizeLibraryAssets(payload.libraryAssets));
         if (merged !== libraryRef.current && mounted.current) { libraryRef.current = merged; setLibraryAssets(merged); }
         reportSave({ ok: true });
       } else if (response.status === 409) {
-        reportSave({ ok: false, message: canvasSaveErrorMessage({ kind: "conflict" }) });
+        inFlightOperationsRef.current = null;
+        reportSave({ ok: false, message: payload.error?.message ?? canvasSaveErrorMessage({ kind: "conflict" }) });
       } else {
         reportSave({
           ok: false,
           message: canvasSaveErrorMessage({ kind: "http", status: response.status, message: payload.error?.message }),
         });
       }
-    } catch {
-      reportSave({ ok: false, message: canvasSaveErrorMessage({ kind: "network" }) });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "";
+      reportSave({ ok: false, message: detail ? `保存失败：${detail}` : canvasSaveErrorMessage({ kind: "network" }) });
     } finally {
       savingRef.current = false;
       if (mounted.current && savedVersion.current === version && dirtyVersion.current !== version) {
@@ -411,6 +525,10 @@ export function FlowCanvas({
 
   const scheduleSave = useCallback(() => {
     dirtyVersion.current++;
+    if (draftReadyRef.current) {
+      const working = canvasSaveBody(docRef.current, { viewport: viewportDirtyRef.current ? viewportRef.current : acknowledgedRef.current.viewport, nodes: latestRef.current.nodes, edges: latestRef.current.edges, libraryAssets: libraryRef.current });
+      void saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: acknowledgedRef.current, working, pending: inFlightOperationsRef.current }).catch(() => reportSave({ ok: false, message: "本地草稿保存失败，请检查本地存储" }));
+    }
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
     }
@@ -419,6 +537,7 @@ export function FlowCanvas({
 
   // 切换画布前调用：停掉防抖、等在途保存、把最新状态落盘，返回是否成功
   const flushSave = useCallback(async (): Promise<boolean> => {
+    if (!draftReadyRef.current) return false;
     while (pendingUploads.current.size) await Promise.allSettled([...pendingUploads.current]);
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
@@ -430,6 +549,50 @@ export function FlowCanvas({
     await save();
     return saveOkRef.current;
   }, [save]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const restore = async () => {
+      try {
+        const key = canvasDraftKey(doc.id);
+        draftKeyRef.current = key;
+        const draft = await loadCanvasDraft(key);
+        if (cancelled) return;
+        if (draft && draft.canvasId === doc.id && draft.base?.id === doc.id && draft.working?.id === doc.id) {
+          acknowledgedRef.current = draft.base;
+          revisionRef.current = draft.base.revision;
+          inFlightOperationsRef.current = draft.pending ?? null;
+          const restoredNodes = draft.working.nodes as Node[], restoredEdges = draft.working.edges as Edge[];
+          latestRef.current = { nodes: restoredNodes, edges: restoredEdges };
+          setNodes(restoredNodes);
+          setEdges(restoredEdges);
+          libraryRef.current = normalizeLibraryAssets(draft.working.libraryAssets);
+          setLibraryAssets(libraryRef.current);
+          viewportRef.current = draft.working.viewport;
+          viewportDirtyRef.current = JSON.stringify(draft.working.viewport) !== JSON.stringify(draft.base.viewport);
+          void setViewport(draft.working.viewport);
+          if (draft.working.name !== docRef.current.name) onRestoreNameRef.current?.(draft.working.name);
+          dirtyVersion.current++;
+          toast.info("已恢复该画布的未保存修改");
+        }
+      } catch {
+        if (!cancelled) reportSave({ ok: false, message: "读取本地草稿失败，请检查本地存储" });
+      } finally {
+        if (!cancelled) { draftReadyRef.current = true; setDraftReady(true); }
+      }
+    };
+    void restore();
+    return () => { cancelled = true; draftReadyRef.current = false; };
+  }, [doc.id, setNodes, setEdges, setViewport]);
+
+  // Pull remote changes without remounting the canvas or interrupting a gesture.
+  useEffect(() => {
+    if (dragging) return;
+    const timer = setInterval(() => {
+      if (draftReadyRef.current && saveOkRef.current && !savingRef.current && !latestRef.current.nodes.some(node => node.dragging || node.resizing)) void save();
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [dragging, save]);
 
   useEffect(() => {
     onRegisterFlush?.(flushSave);
@@ -491,7 +654,7 @@ export function FlowCanvas({
         continue;
       }
       // 刷新后不恢复图片"生成中"：无法确认的任务标记结果未知。视频凭 taskId 恢复轮询。
-      if (node.data.status === "running" && !isPending(doc.id, node.id)) {
+      if (node.data.status === "running" && !isPending(doc.id, node.id) && !doc.generationClaims?.[node.id]) {
         if (
           node.type === "video" &&
           ((typeof node.data.taskId === "string" && node.data.taskId) || submittedVideoTask(doc.id, node.id))
@@ -519,6 +682,7 @@ export function FlowCanvas({
         if (isVideoWatchStopStatus(view.status)) clearPending(doc.id, nodeId);
         return;
       }
+      if (typeof node.data.generationId === "string" && view.generationId && node.data.generationId !== view.generationId) return;
       updateNodeData(nodeId, videoNodePatchFromView(view));
       if (isVideoWatchStopStatus(view.status)) clearPending(doc.id, nodeId);
     },
@@ -590,7 +754,10 @@ export function FlowCanvas({
   const onMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
       setDragging(false);
+      if (viewport.x === viewportRef.current.x && viewport.y === viewportRef.current.y && viewport.zoom === viewportRef.current.zoom) return;
       viewportRef.current = viewport;
+      viewportDirtyRef.current = true;
+      viewportVersionRef.current++;
       scheduleSave();
     },
     [scheduleSave],
@@ -921,6 +1088,16 @@ export function FlowCanvas({
         }
       }
       const generationId = crypto.randomUUID();
+      const claimNodeId = (retrySlotId || overrides?.retry) && typeof node.data.sourceNodeId === "string" ? node.data.sourceNodeId : nodeId;
+      const previousClaim = generationClaims[claimNodeId];
+      if (previousClaim?.state === "unknown") {
+        if (!window.confirm("上次生成的状态未确认，重新生成可能重复计费。确认继续吗？")) return;
+        try { await generationClaim(doc.id, claimNodeId, previousClaim.id, "acknowledge"); }
+        catch (error) { toast.error(error instanceof Error ? error.message : "无法确认生成状态"); return; }
+      }
+      if (!(await flushSave())) { toast.error("画布尚未保存，无法开始生成"); return; }
+      try { await generationClaim(doc.id, claimNodeId, generationId, "claim"); }
+      catch (error) { toast.error(error instanceof Error ? error.message : "无法开始生成"); return; }
       let pendingSourceNodeId: string | null = (node.data.sourceNodeId as string | null | undefined) ?? null;
       if (!retrySlotId && node.data.assetName) {
         const generationRequest = { prompt, aspectRatio, resolution, quality, count, referenceAssets: [...referenceAssets] };
@@ -949,6 +1126,7 @@ export function FlowCanvas({
           await persistResultToOriginCanvas(doc.id, nodeId, outcome);
         }
       };
+      let claimResult: "complete" | "unknown" = "unknown";
       try {
         const response = await fetch("/api/generate/image", {
           method: "POST",
@@ -972,17 +1150,22 @@ export function FlowCanvas({
             toast.error(message);
           }
           await settle({ kind: "failure", generationId, failureKind: "server", message });
+          if ([400, 401, 403].includes(response.status)) claimResult = "complete";
           return;
         }
         await settle({ kind: "result", generationId, slots: payload.slots, retrySlotId, prompt });
+        claimResult = "complete";
       } catch {
         toast.error("生成请求失败：网络错误");
         await settle({ kind: "failure", generationId, failureKind: "network" });
       } finally {
         clearPending(doc.id, nodeId);
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const saved = await flushSave();
+        await generationClaim(doc.id, claimNodeId, generationId, saved ? claimResult : "unknown").catch(() => toast.error("生成结果已返回，但任务状态未能同步"));
       }
     },
-    [doc.id, loggedIn, refreshAuth, updateNodeData, setNodes],
+    [doc.id, loggedIn, refreshAuth, updateNodeData, setNodes, flushSave, generationClaims],
   );
 
   const generateVideo = useCallback(
@@ -1032,6 +1215,17 @@ export function FlowCanvas({
         audio: retryRequest?.audio ?? overrides?.audio ?? data.audio,
       });
       const generationRequest: VideoGenerationRequest = { prompt, ...clamped, inputs };
+      const claimNodeId = overrides?.retry && data.sourceNodeId ? data.sourceNodeId : nodeId;
+      const previousClaim = generationClaims[claimNodeId];
+      if (previousClaim?.state === "unknown") {
+        if (!window.confirm("上次生成的状态未确认，重新生成可能重复计费。确认继续吗？")) return;
+        try { await generationClaim(doc.id, claimNodeId, previousClaim.id, "acknowledge"); }
+        catch (error) { toast.error(error instanceof Error ? error.message : "无法确认生成状态"); return; }
+      }
+      const generationId = crypto.randomUUID();
+      if (!(await flushSave())) { toast.error("画布尚未保存，无法开始生成"); return; }
+      try { await generationClaim(doc.id, claimNodeId, generationId, "claim"); }
+      catch (error) { toast.error(error instanceof Error ? error.message : "无法开始生成"); return; }
       let pendingSourceNodeId: string | null = data.sourceNodeId ?? null;
       if (!overrides?.retry && data.assetName) {
         const original = node;
@@ -1053,6 +1247,7 @@ export function FlowCanvas({
             generationRequest,
             sourceNodeId: original.id,
             status: "running",
+            generationId,
             waitedSeconds: 0,
           },
         };
@@ -1062,6 +1257,7 @@ export function FlowCanvas({
       } else {
         updateNodeData(nodeId, {
           status: "running",
+          generationId,
           prompt,
           duration: generationRequest.duration,
           aspectRatio: generationRequest.aspectRatio,
@@ -1081,6 +1277,7 @@ export function FlowCanvas({
           prompt,
           canvasId: doc.id,
           nodeId,
+          claim: { nodeId: claimNodeId, id: generationId },
           inputs,
           parameters: {
             prompt,
@@ -1096,6 +1293,7 @@ export function FlowCanvas({
           requestId: created.requestId,
           canvasId: doc.id,
           nodeId,
+          generationId,
           status: "pending",
           waitedSeconds: 0,
           result: null,
@@ -1119,18 +1317,20 @@ export function FlowCanvas({
           errorKind: "network",
         });
         clearPending(doc.id, nodeId);
+        const status = (error as { status?: number }).status;
+        await generationClaim(doc.id, claimNodeId, generationId, status && [400, 401, 403].includes(status) ? "complete" : "unknown").catch(() => toast.error("生成任务状态未能同步"));
       }
     },
-    [doc.id, loggedIn, refreshAuth, startVideoWatch, updateNodeData, setNodes],
+    [doc.id, loggedIn, refreshAuth, startVideoWatch, updateNodeData, setNodes, flushSave, generationClaims],
   );
 
   // 生成锁定：节点自身在跑，或它作为来源已有进行中的任务
   const isNodeGenerationLocked = useCallback(
     (nodeId: string) => {
       const node = latestRef.current.nodes.find((item) => item.id === nodeId);
-      return !node || node.data.status === "running" || isPending(doc.id, nodeId) || hasPendingFrom(doc.id, nodeId);
+      return !node || generationClaims[nodeId]?.state === "pending" || node.data.status === "running" || isPending(doc.id, nodeId) || hasPendingFrom(doc.id, nodeId);
     },
-    [doc.id],
+    [doc.id, generationClaims],
   );
 
   // ---- 删除（支持撤销）----
@@ -1143,14 +1343,14 @@ export function FlowCanvas({
       const removedEdges = latestRef.current.edges.filter(
         (edge) => nodeIds.includes(edge.source) || nodeIds.includes(edge.target),
       );
-      undoStackRef.current.push({ type: "delete", nodes: removedNodes, edges: removedEdges });
+      pushUndo({ type: "delete", nodes: removedNodes, edges: removedEdges });
       redoStackRef.current = [];
       setNodes((current) => current.filter((node) => !nodeIds.includes(node.id)));
       setEdges((current) =>
         current.filter((edge) => !nodeIds.includes(edge.source) && !nodeIds.includes(edge.target)),
       );
     },
-    [setNodes, setEdges],
+    [setNodes, setEdges, pushUndo],
   );
 
   // ---- 复制 / 粘贴 / 副本（内部剪贴板，跨画布不共享）----
@@ -1261,18 +1461,18 @@ export function FlowCanvas({
       if (!edge) {
         return;
       }
-      undoStackRef.current.push({ type: "delete", nodes: [], edges: [edge] });
+      pushUndo({ type: "delete", nodes: [], edges: [edge] });
       redoStackRef.current = [];
       setEdges((current) => current.filter((item) => item.id !== edgeId));
     },
-    [setEdges],
+    [setEdges, pushUndo],
   );
 
   const deleteSelection = useCallback(() => {
     const selectedNodeIds = latestRef.current.nodes.filter((node) => node.selected).map((node) => node.id);
     const selectedEdges = latestRef.current.edges.filter((edge) => edge.selected);
     for (const edge of selectedEdges) {
-      undoStackRef.current.push({ type: "delete", nodes: [], edges: [edge] });
+      pushUndo({ type: "delete", nodes: [], edges: [edge] });
       redoStackRef.current = [];
     }
     if (selectedEdges.length > 0) {
@@ -1280,13 +1480,14 @@ export function FlowCanvas({
       setEdges((current) => current.filter((edge) => !ids.includes(edge.id)));
     }
     deleteNodes(selectedNodeIds);
-  }, [deleteNodes, setEdges]);
+  }, [deleteNodes, setEdges, pushUndo]);
 
   const undo = useCallback(() => {
     const entry = undoStackRef.current.pop();
     if (!entry) {
       return;
     }
+    if (!undoStillValid(entry)) { undoStackRef.current.push(entry); toast.error("节点已被其他操作修改，无法安全撤销"); return; }
     redoStackRef.current.push(entry);
     if (entry.type === "delete") {
       // 恢复删除期间完成的任务结果（orphan 补写，成功/失败都补）
@@ -1330,6 +1531,7 @@ export function FlowCanvas({
     if (!entry) {
       return;
     }
+    if (!undoStillValid(entry)) { redoStackRef.current.push(entry); toast.error("节点已被其他操作修改，无法安全重做"); return; }
     undoStackRef.current.push(entry);
     if (entry.type === "delete") {
       const nodeIds = entry.nodes.map((node) => node.id);
@@ -1454,11 +1656,11 @@ export function FlowCanvas({
       })
       .filter((item): item is { id: string; from: { x: number; y: number }; to: { x: number; y: number } } => item !== null);
     if (items.length > 0) {
-      undoStackRef.current.push({ type: "move", items });
+      pushUndo({ type: "move", items });
       redoStackRef.current = [];
     }
     dragStartRef.current = [];
-  }, []);
+  }, [pushUndo]);
 
   // ---- 设为主图（可撤销）：assetName 始终跟随主图槽 ----
   const setPrimaryResult = useCallback(
@@ -1480,11 +1682,11 @@ export function FlowCanvas({
         return;
       }
       const next = { primaryResultId: slotId, assetName: slot.assetName };
-      undoStackRef.current.push({ type: "setPrimary", nodeId, prev, next });
+      pushUndo({ type: "setPrimary", nodeId, prev, next });
       redoStackRef.current = [];
       updateNodeData(nodeId, next);
     },
-    [updateNodeData],
+    [updateNodeData, pushUndo],
   );
 
   // ---- 复制为节点：复用已保存资产，提示词引用转成可读文字，不带连线与运行状态 ----
@@ -1556,6 +1758,8 @@ export function FlowCanvas({
 
   const actions = useMemo(
     () => ({
+      canvasId: doc.id,
+      flushEdits: flushSave,
       generate,
       generateVideo,
       setPrimaryResult,
@@ -1568,7 +1772,7 @@ export function FlowCanvas({
       removeEdge: deleteEdge,
       requestAttachmentUpload,
     }),
-    [generate, generateVideo, setPrimaryResult, copyCandidateAsNode, openCandidates, closeCandidates, expandedNodeId, isNodeGenerationLocked, panelNodeId, deleteEdge, requestAttachmentUpload],
+    [doc.id, flushSave, generate, generateVideo, setPrimaryResult, copyCandidateAsNode, openCandidates, closeCandidates, expandedNodeId, isNodeGenerationLocked, panelNodeId, deleteEdge, requestAttachmentUpload],
   );
 
   const pickerNode = picker ? nodes.find(node => node.id === picker.nodeId) : undefined;
@@ -1582,6 +1786,7 @@ export function FlowCanvas({
     <CanvasActionsContext.Provider value={actions}>
       <div
         ref={wrapperRef}
+        inert={!draftReady}
         className={`relative h-full w-full ${mode === "hand" ? "canvas-hand" : ""}`}
         onClick={() => {
           // 拖线松开会先弹菜单再触发同一次 click，忽略紧随其后的这次点击

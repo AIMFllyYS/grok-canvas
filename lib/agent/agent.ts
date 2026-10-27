@@ -19,6 +19,7 @@ import { canvasVideoBody } from "./generation";
 import { readVideoTask, isTerminalVideoTask } from "../video-tasks";
 import { parseGenerationCount } from "../multi-image";
 import { AgentError } from "./store";
+import { claimGeneration, finishGeneration } from "../generation-claims";
 import type { AgentSettings } from "./schema";
 
 export function createCanvasTools(canvasId: string, origin: string) {
@@ -43,11 +44,13 @@ export function createCanvasTools(canvasId: string, origin: string) {
       throw new AgentError("当前画布中没有对应节点", 404);
     return { c, n };
   };
-  const patch = async (id: string, fields: Record<string, unknown>) =>
-    mutateCanvas(canvasId, (c) => {
-      const n = (c.nodes as CanvasNode[]).find((n) => n.id === id);
-      if (!n) throw new AgentError("节点已删除");
-      Object.assign(n.data, fields);
+  const patchClaimed = async (nodeId: string, claimId: string, fields: Record<string, unknown>) =>
+    mutateCanvas(canvasId, c => {
+      if (c.generationClaims?.[nodeId]?.id !== claimId) throw new AgentError("生成任务已不再属于该节点", 409);
+      const current = (c.nodes as CanvasNode[]).find(item => item.id === nodeId);
+      if (!current) throw new AgentError("节点已删除", 409);
+      if (fields.status !== "running" && current.data.generationId !== claimId) throw new AgentError("节点已有更新的生成任务", 409);
+      Object.assign(current.data, fields);
     });
   return {
     read_canvas: tool({
@@ -178,8 +181,12 @@ export function createCanvasTools(canvasId: string, origin: string) {
         );
         if (refs.pending)
           throw new AgentError("参考图片尚未生成，请先完成来源节点");
-        await patch(nodeId, { status: "running", errorMessage: null });
+        const generationId = crypto.randomUUID();
+        await claimGeneration(canvasId, nodeId, generationId);
+        let submitted = false;
         try {
+          await patchClaimed(nodeId, generationId, { status: "running", generationId, errorMessage: null });
+          submitted = true;
           const result = await call("/api/generate/image", {
             prompt: n.data.prompt,
             aspect_ratio: n.data.aspectRatio,
@@ -193,7 +200,7 @@ export function createCanvasTools(canvasId: string, origin: string) {
           );
           if (!success)
             throw new AgentError(result.slots?.[0]?.error ?? "图片未保存");
-          await patch(nodeId, {
+          await patchClaimed(nodeId, generationId, {
             status: "idle",
             assetName: success.asset.name,
             results: result.slots.map(
@@ -210,12 +217,14 @@ export function createCanvasTools(canvasId: string, origin: string) {
             ),
             primaryResultId: success.asset.name,
           });
+          await finishGeneration(canvasId, nodeId, generationId, "completed");
           return success.asset;
         } catch (e) {
-          await patch(nodeId, {
+          await patchClaimed(nodeId, generationId, {
             status: "failed",
             errorMessage: (e as Error).message,
-          });
+          }).catch(() => {});
+          await finishGeneration(canvasId, nodeId, generationId, submitted ? "unknown" : "completed").catch(() => {});
           throw e;
         }
       },
@@ -234,16 +243,21 @@ export function createCanvasTools(canvasId: string, origin: string) {
             throw new AgentError("已有视频任务，请先查询原任务");
         }
         const body = canvasVideoBody(canvasId, n, c);
-        await patch(nodeId, { status: "running", errorMessage: null });
+        const generationId = crypto.randomUUID();
+        await claimGeneration(canvasId, nodeId, generationId);
+        let submitted = false;
         try {
-          const result = await call("/api/generate/video", body);
-          await patch(nodeId, { taskId: result.taskId });
+          await patchClaimed(nodeId, generationId, { status: "running", generationId, errorMessage: null });
+          submitted = true;
+          const result = await call("/api/generate/video", { ...body, claim: { nodeId, id: generationId } });
+          await patchClaimed(nodeId, generationId, { taskId: result.taskId });
           return result;
         } catch (e) {
-          await patch(nodeId, {
+          await patchClaimed(nodeId, generationId, {
             status: "failed",
             errorMessage: (e as Error).message,
-          });
+          }).catch(() => {});
+          await finishGeneration(canvasId, nodeId, generationId, submitted ? "unknown" : "completed").catch(() => {});
           throw e;
         }
       },
@@ -259,7 +273,11 @@ export function createCanvasTools(canvasId: string, origin: string) {
         )) as VideoTaskView;
         if (result.canvasId !== canvasId || result.nodeId !== nodeId)
           throw new AgentError("任务不属于当前节点");
-        await patch(nodeId, videoNodePatchFromView(result));
+        await mutateCanvas(canvasId, doc => {
+          const current = (doc.nodes as CanvasNode[]).find(item => item.id === nodeId);
+          if (!current || (result.generationId && current.data.generationId !== result.generationId)) throw new AgentError("视频任务已过期", 409);
+          Object.assign(current.data, videoNodePatchFromView(result));
+        });
         return result;
       },
     }),
