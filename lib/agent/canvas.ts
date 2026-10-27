@@ -2,6 +2,9 @@ import { loadCanvas, saveCanvas, type CanvasDoc } from "../canvas-store";
 import { resolveCanvasReferences } from "../canvas-references";
 import { placeNewNode } from "../node-placement";
 import { AgentError } from "./store";
+// The standard media-node reference is 280 canvas units.
+export const AGENT_TEXT_MAX_WIDTH = 560;
+export const AGENT_TEXT_MAX_HEIGHT = 1120;
 export type CanvasNode = {
   id: string;
   type: string;
@@ -33,7 +36,7 @@ export function addNodes(
   c: CanvasDoc,
   items: {
     type: "image" | "video" | "canvasText";
-    name: string;
+    name?: string;
     prompt: string;
     content?: string;
     width?: number;
@@ -44,15 +47,17 @@ export function addNodes(
 ) {
   const nodes = c.nodes as CanvasNode[];
   const added = items.map((item) => {
-    const size = item.type === "canvasText" ? { width: item.width ?? 360, height: item.height ?? 260 } : { width: 304, height: 264 };
+    const size = item.type === "canvasText"
+      ? { width: Math.min(item.width ?? 360, AGENT_TEXT_MAX_WIDTH), height: Math.min(item.height ?? 260, AGENT_TEXT_MAX_HEIGHT) }
+      : { width: 304, height: 264 };
     const position = placeNewNode({ x: item.x ?? 0, y: item.y ?? 0 }, nodes, size);
     const n = {
       id: crypto.randomUUID(),
       type: item.type,
       position,
       ...(item.type === "canvasText" ? size : {}),
-      data: item.type === "canvasText" ? { name: item.name, content: item.content ?? "" } : {
-        name: item.name,
+      data: item.type === "canvasText" ? { name: item.name ?? "文稿", content: item.content ?? "" } : {
+        name: item.name ?? (item.type === "image" ? "图片" : "视频"),
         prompt: item.prompt,
         status: "idle",
         assetName: null,
@@ -108,8 +113,8 @@ export function editNodes(
     if (u.content !== undefined || u.width !== undefined || u.height !== undefined) {
       if (n.type !== "canvasText") throw new AgentError("仅文本节点支持正文和调整尺寸");
       if (u.content !== undefined) n.data.content = u.content;
-      if (u.width !== undefined) n.width = u.width;
-      if (u.height !== undefined) n.height = u.height;
+      if (u.width !== undefined) n.width = Math.min(u.width, AGENT_TEXT_MAX_WIDTH);
+      if (u.height !== undefined) n.height = Math.min(u.height, AGENT_TEXT_MAX_HEIGHT);
     }
     if (u.prompt !== undefined) {
       if (!["image", "video"].includes(n.type))

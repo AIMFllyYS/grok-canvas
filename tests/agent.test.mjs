@@ -149,10 +149,27 @@ test("Text nodes retain content and dimensions, avoid occupied space, and connec
   canvas.module.editNodes(c, { updates: [{ id: text.id, content: "## 更新", width: 640, height: 420 }], remove: [], connect: pairs.map(([source, target]) => ({ source, target })), disconnect: [] });
   assert.equal(text.id, c.nodes.find(n => n.id === text.id).id);
   const updated = c.nodes.find(n => n.id === text.id);
-  assert.deepEqual([updated.data.content, updated.width, updated.height], ["## 更新", 640, 420]);
+  assert.deepEqual([updated.data.content, updated.width, updated.height], ["## 更新", 560, 420]);
   assert.equal(c.edges.length, pairs.length);
   assert.deepEqual(generation.module.canvasVideoBody("test", c.nodes.find(n => n.id === "video"), c).inputs, []);
   const cleaned = cleanup.module.cleanCanvas(c);
   assert.equal(cleaned.nodes.find(n => n.id === text.id).data.content, "## 更新");
   assert.equal(cleaned.edges.length, pairs.length);
+});
+
+test("Agent text sizing is bounded without changing user-sized dimensions on content edits", () => {
+  const c = { nodes: [], edges: [] };
+  const [node] = canvas.module.addNodes(c, [{ type: "canvasText", prompt: "", content: "原文", width: 900, height: 2000 }]);
+  assert.deepEqual([node.data.name, node.width, node.height], ["文稿", 560, 1120]);
+  node.width = 900;
+  node.height = 1500;
+  const edit = updates => canvas.module.editNodes(c, { updates, remove: [], connect: [], disconnect: [] });
+  edit([{ id: node.id, content: "更新", x: 100 }]);
+  assert.deepEqual([c.nodes[0].width, c.nodes[0].height, c.nodes[0].data.content], [900, 1500, "更新"]);
+  edit([{ id: node.id, width: 800 }]);
+  assert.deepEqual([c.nodes[0].width, c.nodes[0].height], [560, 1500]);
+  edit([{ id: node.id, height: 2000 }]);
+  assert.deepEqual([c.nodes[0].width, c.nodes[0].height], [560, 1120]);
+  edit([{ id: node.id, width: 480, height: 800 }]);
+  assert.deepEqual([c.nodes[0].width, c.nodes[0].height], [480, 800]);
 });
