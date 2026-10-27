@@ -6,6 +6,8 @@ export type CanvasNode = {
   id: string;
   type: string;
   position: { x: number; y: number };
+  width?: number;
+  height?: number;
   data: Record<string, unknown>;
 };
 export type CanvasEdge = {
@@ -30,21 +32,26 @@ export async function mutateCanvas(id: string, edit: (doc: CanvasDoc) => void) {
 export function addNodes(
   c: CanvasDoc,
   items: {
-    type: "image" | "video";
+    type: "image" | "video" | "canvasText";
     name: string;
     prompt: string;
+    content?: string;
+    width?: number;
+    height?: number;
     x?: number;
     y?: number;
   }[],
 ) {
   const nodes = c.nodes as CanvasNode[];
   const added = items.map((item) => {
-    const position = placeNewNode({ x: item.x ?? 0, y: item.y ?? 0 }, nodes);
+    const size = item.type === "canvasText" ? { width: item.width ?? 360, height: item.height ?? 260 } : { width: 304, height: 264 };
+    const position = placeNewNode({ x: item.x ?? 0, y: item.y ?? 0 }, nodes, size);
     const n = {
       id: crypto.randomUUID(),
       type: item.type,
       position,
-      data: {
+      ...(item.type === "canvasText" ? size : {}),
+      data: item.type === "canvasText" ? { name: item.name, content: item.content ?? "" } : {
         name: item.name,
         prompt: item.prompt,
         status: "idle",
@@ -71,6 +78,9 @@ export function editNodes(
       id: string;
       name?: string;
       prompt?: string;
+      content?: string;
+      width?: number;
+      height?: number;
       x?: number;
       y?: number;
     }[];
@@ -95,6 +105,12 @@ export function editNodes(
   for (const u of edit.updates) {
     const n = nodes.find((n) => n.id === u.id)!;
     if (u.name !== undefined) n.data.name = u.name;
+    if (u.content !== undefined || u.width !== undefined || u.height !== undefined) {
+      if (n.type !== "canvasText") throw new AgentError("仅文本节点支持正文和调整尺寸");
+      if (u.content !== undefined) n.data.content = u.content;
+      if (u.width !== undefined) n.width = u.width;
+      if (u.height !== undefined) n.height = u.height;
+    }
     if (u.prompt !== undefined) {
       if (!["image", "video"].includes(n.type))
         throw new AgentError("仅图片和视频节点支持提示词");
@@ -119,11 +135,12 @@ export function editNodes(
       !source ||
       !target ||
       source.id === target.id ||
-      !["image", "asset"].includes(source.type) ||
-      !["image", "video"].includes(target.type)
+      (!(source.type === "canvasText" || target.type === "canvasText") &&
+        (!["image", "asset"].includes(source.type) || !["image", "video"].includes(target.type)))
     )
       throw new AgentError("连线端点无效；图片可作为图片或视频参考");
-    if (target.data.status === "running")
+    const textLink = source.type === "canvasText" || target.type === "canvasText";
+    if (!textLink && target.data.status === "running")
       throw new AgentError("目标节点正在生成");
     if (!edges.some((e) => e.source === source.id && e.target === target.id))
       edges.push({
@@ -131,7 +148,7 @@ export function editNodes(
         source: source.id,
         target: target.id,
         type: "scissor",
-        data: target.type === "video" ? { role: link.role ?? "reference" } : {},
+        data: !textLink && target.type === "video" ? { role: link.role ?? "reference" } : {},
       });
   }
   copy.edges = edges;

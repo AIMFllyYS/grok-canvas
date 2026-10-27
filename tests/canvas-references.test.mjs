@@ -10,6 +10,16 @@ const image = (id, data = {}) => ({ id, type: "image", data: { uploadAttachments
 const video = (id, data = {}) => ({ id, type: "video", data: { uploadInputs: [], ...data } });
 const asset = assetName => ({ assetName, name: assetName });
 
+test("文本连线不占图片或视频参考槽位", () => {
+  const text = { id: "text", type: "canvasText", data: { content: "不会成为提示词" } };
+  for (const target of [image("image"), video("video")]) {
+    const result = resolveCanvasReferences(target, [text, target], [{ source: text.id, target: target.id, data: { role: "first" } }]);
+    assert.deepEqual(result.assets, []);
+    assert.equal(result.occupied, 0);
+    assert.equal(result.pending, 0);
+  }
+});
+
 test("同图的连线和固定参考只提交一次", () => {
   const target = image("t", { uploadAttachments: ["a.png"] });
   const result = resolveCanvasReferences(target, [image("s", { assetName: "a.png" }), target], [{ id: "e", source: "s", target: "t" }]);

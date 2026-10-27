@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { MiniMap } from "@xyflow/react";
-import { GripVertical, ImagePlus, MoveDiagonal2, Video } from "lucide-react";
+import { FileText, GripVertical, ImagePlus, MoveDiagonal2, Video } from "lucide-react";
 import { CanvasControls } from "./canvas-controls";
 import { ControlButton } from "../ui/control-button";
 import { useWorkspacePreferences } from "../workspace-preferences";
@@ -15,9 +15,9 @@ import type { InteractionMode } from "@/lib/canvas-interaction";
 
 type ResizeAxis = "x" | "y" | "both";
 
-export function CanvasToolbar({ canvasId, containerRef, mode, onModeChange, minimapOpen, onToggleMinimap, onAddImage, onAddVideo, onDraggingChange }: {
+export function CanvasToolbar({ canvasId, containerRef, mode, onModeChange, minimapOpen, onToggleMinimap, onAddImage, onAddVideo, onAddText, onDraggingChange }: {
   canvasId: string; containerRef: RefObject<HTMLDivElement | null>; mode: InteractionMode; onModeChange: (mode: InteractionMode) => void;
-  minimapOpen: boolean; onToggleMinimap: () => void; onAddImage: () => void; onAddVideo: () => void; onDraggingChange: (dragging: boolean) => void;
+  minimapOpen: boolean; onToggleMinimap: () => void; onAddImage: () => void; onAddVideo: () => void; onAddText: () => void; onDraggingChange: (dragging: boolean) => void;
 }) {
   const { layout, positionReset } = useWorkspacePreferences();
   const ref = useRef<HTMLDivElement>(null);
@@ -176,6 +176,7 @@ export function CanvasToolbar({ canvasId, containerRef, mode, onModeChange, mini
     <CanvasControls mode={mode} onModeChange={onModeChange} minimapOpen={minimapOpen} onToggleMinimap={onToggleMinimap} leading={layout === "aggregated" ? <>
       <ControlButton aria-label="添加图片节点" title="添加图片节点" onClick={onAddImage} className="flex size-8 items-center justify-center rounded-full"><ImagePlus size={17} /></ControlButton>
       <ControlButton aria-label="添加视频节点" title="添加视频节点" onClick={onAddVideo} className="flex size-8 items-center justify-center rounded-full"><Video size={17} /></ControlButton>
+      <ControlButton aria-label="添加文本节点" title="添加文本节点" onClick={onAddText} className="flex size-8 items-center justify-center rounded-full"><FileText size={17} /></ControlButton>
       <span className="mx-1 h-4 w-px bg-border" />
     </> : undefined} />
     {minimapOpen && layout === "scattered" && <div className="absolute left-0 overflow-hidden rounded-xl border bg-popover p-1 shadow-xl" style={{ top: position.y >= 152 ? -144 : 48 }}>

@@ -305,3 +305,9 @@ html:root :is(input, textarea, [contenteditable="true"]) { caret-color: var(--ui
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ui-parameter-option, .ui-parameter-trigger, .ui-generate-button, .ui-quality-switch, .ui-quality-switch *, .ui-tool-button, .ui-canvas-toolbar button, .ui-node-surface, .ui-settings-popup) { transition: none; animation: none; }
 }
+/* Wider pointer targets for the otherwise hairline text-node resize edges. */
+.canvas-text-resize.line::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+}

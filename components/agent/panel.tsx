@@ -299,7 +299,7 @@ function Chat({
             <div className="agent-empty">
               <AgentGlyph size={25} />
               <p>从当前画布开始</p>
-              <span>整理想法，创建或调整图片与视频节点。</span>
+              <span>整理想法，创建或调整文本、图片与视频节点。</span>
             </div>
           )}
           {messages.map((m) => (

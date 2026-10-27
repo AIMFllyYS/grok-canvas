@@ -106,8 +106,9 @@ import {
   type ImageNodeData,
 } from "./image-node";
 import { defaultVideoNodeData, VideoNode, type VideoFlowNode, type VideoNodeData } from "./video-node";
+import { TextNode, type TextFlowNode } from "./text-node";
 
-const nodeTypes = { image: ImageNode, asset: AssetNode, video: VideoNode };
+const nodeTypes = { image: ImageNode, asset: AssetNode, video: VideoNode, canvasText: TextNode };
 const edgeTypes = { scissor: ScissorEdge };
 
 function videoEdgeRole(edge: Edge): VideoInputRole {
@@ -118,7 +119,7 @@ function videoOccupancy(nodeId: string, nodes: Node[], edges: Edge[]): Array<{ r
   const node = nodes.find((item) => item.id === nodeId);
   const uploads = ((node?.data as VideoNodeData | undefined)?.uploadInputs) ?? [];
   return [
-    ...edges.filter((edge) => edge.target === nodeId).map((edge) => ({ role: videoEdgeRole(edge) })),
+    ...edges.filter((edge) => edge.target === nodeId && nodes.find(node => node.id === edge.source)?.type !== "canvasText").map((edge) => ({ role: videoEdgeRole(edge) })),
     ...uploads,
   ];
 }
@@ -599,7 +600,7 @@ export function FlowCanvas({
   const attachmentCountOf = useCallback((nodeId: string): number => {
     const node = latestRef.current.nodes.find((item) => item.id === nodeId);
     const uploads = (node?.data.uploadAttachments as string[] | undefined) ?? [];
-    const incoming = latestRef.current.edges.filter((edge) => edge.target === nodeId).length;
+    const incoming = latestRef.current.edges.filter((edge) => edge.target === nodeId && latestRef.current.nodes.find(item => item.id === edge.source)?.type !== "canvasText").length;
     return uploads.length + incoming;
   }, []);
 
@@ -614,6 +615,8 @@ export function FlowCanvas({
     if (latestRef.current.edges.some((edge) => edge.target === target && edge.source === source)) {
       return false;
     }
+    if (!sourceNode || !targetNode) return false;
+    if (sourceNode.type === "canvasText" || targetNode.type === "canvasText") return true;
     if (targetNode?.type === "video") {
       if (sourceNode?.type !== "image" && sourceNode?.type !== "asset") {
         return false;
@@ -623,12 +626,13 @@ export function FlowCanvas({
     if (targetNode?.type !== "image") {
       return false;
     }
-    return attachmentCountOf(target) < ATTACHMENT_MAX;
+    return (sourceNode.type === "image" || sourceNode.type === "asset") && attachmentCountOf(target) < ATTACHMENT_MAX;
   }, [attachmentCountOf]);
 
   const connectEdge = useCallback((connection: Connection): Edge => {
     const targetNode = latestRef.current.nodes.find((node) => node.id === connection.target);
-    if (targetNode?.type === "video" && connection.target) {
+    const sourceNode = latestRef.current.nodes.find((node) => node.id === connection.source);
+    if (targetNode?.type === "video" && sourceNode?.type !== "canvasText" && connection.target) {
       return {
         ...connection,
         id: crypto.randomUUID(),
@@ -746,6 +750,15 @@ export function FlowCanvas({
     },
     [setNodes],
   );
+
+  const addTextNode = useCallback((at: { x: number; y: number }): TextFlowNode => {
+    const node: TextFlowNode = { id: crypto.randomUUID(), type: "canvasText", position: at, width: 360, height: 260, selected: true, data: { name: "文本", content: "" } };
+    const next = [...latestRef.current.nodes.map(item => item.selected ? { ...item, selected: false } : item), node];
+    latestRef.current = { ...latestRef.current, nodes: next };
+    setNodes(next);
+    setPanelNodeId(node.id);
+    return node;
+  }, [setNodes]);
 
   const addAssetNode = useCallback(
     (at: { x: number; y: number }, assetName: string, name: string): Node => {
@@ -1675,6 +1688,7 @@ export function FlowCanvas({
                   setMenu(null);
                 }}
               />
+              <MenuButton label="添加文本节点" onClick={() => { pushAdd([addTextNode(viewportCenter())], []); setMenu(null); }} />
               <div className="mx-1 my-2 border-t" />
               <MenuButton
                 label="上传图片"
@@ -1690,7 +1704,7 @@ export function FlowCanvas({
 
         <CanvasToolbar canvasId={doc.id} containerRef={wrapperRef} mode={mode} onModeChange={next => { setMode(next); setMenu(null); }}
           minimapOpen={minimapOpen} onToggleMinimap={() => setMinimapOpen(open => !open)}
-          onAddImage={() => { setMode("select"); pushAdd([addImageNode(viewportCenter())], []); }} onAddVideo={() => { setMode("select"); pushAdd([addVideoNode(viewportCenter())], []); }} onDraggingChange={setDragging} />
+          onAddImage={() => { setMode("select"); pushAdd([addImageNode(viewportCenter())], []); }} onAddVideo={() => { setMode("select"); pushAdd([addVideoNode(viewportCenter())], []); }} onAddText={() => { setMode("select"); pushAdd([addTextNode(viewportCenter())], []); }} onDraggingChange={setDragging} />
         <AssetLibrary canvasName={doc.name} target={nodes.find(node => node.id === panelNodeId)} blocked={dragging || Boolean(picker)} uploading={uploading} onUpload={() => openLibraryUpload()}
           onPlace={asset => { setMode("select"); pushAdd([addAssetNode(viewportCenter(), asset.assetName, asset.name)], []); }} />
         {picker && pickerNode && <ReferencePicker key={`${picker.nodeId}:${picker.role}:${Boolean(picker.onSelect)}`} node={pickerNode} options={picker} bound={pickerBound} uploading={uploading}
@@ -1737,6 +1751,7 @@ export function FlowCanvas({
                     setMenu(null);
                   }}
                 />
+                <MenuButton label="添加文本节点" onClick={() => { pushAdd([addTextNode(menu.flow)], []); setMenu(null); }} />
                 <div className="mx-1 my-2 border-t" />
                 <MenuButton
                   label="上传图片"
@@ -1854,7 +1869,8 @@ export function FlowCanvas({
             ) : null}
             {menu.kind === "connect-create" ? (
               <>
-                <p className="px-2 py-1 text-xs text-muted-foreground">添加节点并引用此图</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">添加并连接节点</p>
+                {latestRef.current.nodes.find(node => node.id === menu.sourceId)?.type !== "video" && <>
                 <MenuButton
                   label="图片节点"
                   onClick={() => {
@@ -1880,13 +1896,21 @@ export function FlowCanvas({
                       target: node.id,
                       type: "scissor",
                       // 新节点的首次引用默认首帧（与 connectEdge 同一规则来源）
-                      data: { role: defaultNewVideoRole([]) ?? "reference" },
+                      ...(latestRef.current.nodes.find(item => item.id === menu.sourceId)?.type === "canvasText" ? {} : { data: { role: defaultNewVideoRole([]) ?? "reference" } }),
                     };
                     setEdges((current) => addEdge(edge, current));
                     pushAdd([node], [edge]);
                     setMenu(null);
                   }}
                 />
+                </>}
+                <MenuButton label="文本节点" onClick={() => {
+                  const node = addTextNode(menu.flow);
+                  const edge: Edge = { id: crypto.randomUUID(), source: menu.sourceId, target: node.id, type: "scissor" };
+                  setEdges(current => addEdge(edge, current));
+                  pushAdd([node], [edge]);
+                  setMenu(null);
+                }} />
               </>
             ) : null}
           </FloatingMenu>

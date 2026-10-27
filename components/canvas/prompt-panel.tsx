@@ -78,7 +78,9 @@ const PanelBody = memo(function PanelBody({ nodeId, data }: { nodeId: string; da
 
   const showRestore = hasImage && data.draftPrompt != null && data.draftPrompt.trim() !== data.prompt.trim();
 
-  const incomingEdges = useStore((state) => state.edges).filter((edge) => edge.target === nodeId);
+  const allEdges = useStore((state) => state.edges);
+  const allNodes = useStore((state) => state.nodes);
+  const incomingEdges = allEdges.filter((edge) => edge.target === nodeId && allNodes.find(node => node.id === edge.source)?.type !== "canvasText");
   const sourceNodes = useNodesData(incomingEdges.map((edge) => edge.source));
   const edgeAttachments = incomingEdges.map(edge => ({
     edgeId: edge.id,
@@ -253,7 +255,9 @@ const VideoPanelBody = memo(function VideoPanelBody({ nodeId, data }: { nodeId: 
   const [localResolution, setLocalResolution] = useState(data.resolution);
   const [localAudio, setLocalAudio] = useState(data.audio);
 
-  const incomingEdges = useStore((state) => state.edges).filter((edge) => edge.target === nodeId);
+  const allEdges = useStore((state) => state.edges);
+  const allNodes = useStore((state) => state.nodes);
+  const incomingEdges = allEdges.filter((edge) => edge.target === nodeId && allNodes.find(node => node.id === edge.source)?.type !== "canvasText");
   const sourceNodes = useNodesData(incomingEdges.map((edge) => edge.source));
   const uploadInputs = data.uploadInputs ?? [];
   const slots: VideoSlot[] = [
@@ -438,7 +442,7 @@ export function PromptPanel() {
     return null;
   }
   // 生成中也允许打开面板：按钮转 loading，编辑器只读
-  if (panelNode.type !== "image" && panelNode.type !== "video") {
+  if (panelNode.type !== "image" && panelNode.type !== "video" && panelNode.type !== "canvasText") {
     return null;
   }
 
@@ -452,9 +456,18 @@ export function PromptPanel() {
       className="ui-prompt-panel nodrag nowheel nopan absolute z-20 rounded-2xl bg-popover p-3 text-popover-foreground shadow-xl ring-1 ring-foreground/10"
       style={placement}
     >
-      {panelNode.type === "video"
+      {panelNode.type === "canvasText"
+        ? <TextPanelBody key={panelNodeId} nodeId={panelNodeId} content={String(panelNode.data.content ?? "")} />
+        : panelNode.type === "video"
         ? <VideoPanelBody key={panelNodeId} nodeId={panelNodeId} data={panelNode.data as VideoNodeData} />
         : <PanelBody key={panelNodeId} nodeId={panelNodeId} data={panelNode.data as ImageNodeData} />}
     </div>
   );
+}
+
+function TextPanelBody({ nodeId, content }: { nodeId: string; content: string }) {
+  const { updateNodeData } = useReactFlow();
+  return <textarea aria-label="编辑文本节点" placeholder="输入 Markdown 文本" value={content}
+    onChange={event => updateNodeData(nodeId, { content: event.target.value })}
+    className="ui-prompt-editor nodrag nopan nowheel min-h-24 max-h-60 w-full resize-y bg-transparent px-1 py-2 text-base outline-none" />;
 }

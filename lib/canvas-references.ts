@@ -35,6 +35,7 @@ export function resolveCanvasReferences(node: ReferenceNode, nodes: ReferenceNod
   };
   for (const edge of incoming) {
     const source = byId.get(edge.source);
+    if (source?.type === "canvasText") continue;
     const role = video ? parseVideoEdgeRole(edge.data?.role) : "reference";
     if (source?.data.assetName == null) { pendingRoles.push(role); continue; }
     add(source.data.assetName, role, source.data.name);

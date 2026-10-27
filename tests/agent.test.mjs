@@ -134,3 +134,25 @@ test("Retired canvas records disappear without losing media nodes or unrelated i
   assert.equal(result.edges.length, 1);
   assert.equal(c.nodes.length, 4);
 });
+
+test("Text nodes retain content and dimensions, avoid occupied space, and connect without becoming media references", () => {
+  const c = { nodes: [{ id: "large", type: "image", position: { x: 0, y: 0 }, width: 900, height: 600, data: { name: "image" } },
+    { id: "video", type: "video", position: { x: 1500, y: 0 }, data: { name: "video" } },
+    { id: "asset", type: "asset", position: { x: 2000, y: 0 }, data: { name: "asset", assetName: "a.png" } }], edges: [] };
+  const [text, second] = canvas.module.addNodes(c, [
+    { type: "canvasText", name: "脚本一", prompt: "", content: "# 第一幕\n内容", width: 500, height: 400 },
+    { type: "canvasText", name: "脚本二", prompt: "", content: "第二幕", width: 400, height: 300 },
+  ]);
+  assert.ok(text.position.x >= 924 || text.position.y >= 624 || text.position.x + 524 <= 0 || text.position.y + 424 <= 0);
+  assert.notDeepEqual(text.position, second.position);
+  const pairs = [[text.id, "large"], ["large", text.id], [text.id, "video"], ["video", text.id], [text.id, "asset"], ["asset", text.id], [text.id, second.id]];
+  canvas.module.editNodes(c, { updates: [{ id: text.id, content: "## 更新", width: 640, height: 420 }], remove: [], connect: pairs.map(([source, target]) => ({ source, target })), disconnect: [] });
+  assert.equal(text.id, c.nodes.find(n => n.id === text.id).id);
+  const updated = c.nodes.find(n => n.id === text.id);
+  assert.deepEqual([updated.data.content, updated.width, updated.height], ["## 更新", 640, 420]);
+  assert.equal(c.edges.length, pairs.length);
+  assert.deepEqual(generation.module.canvasVideoBody("test", c.nodes.find(n => n.id === "video"), c).inputs, []);
+  const cleaned = cleanup.module.cleanCanvas(c);
+  assert.equal(cleaned.nodes.find(n => n.id === text.id).data.content, "## 更新");
+  assert.equal(cleaned.edges.length, pairs.length);
+});
