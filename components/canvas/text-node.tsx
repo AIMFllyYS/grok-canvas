@@ -24,7 +24,9 @@ export function TextNode({ id, data, selected, draggable }: NodeProps<TextFlowNo
       <NodeTitle nodeId={id} name={data.name} />
     </div>
     <NodeSurface selected={selected} zoom={zoom} className="h-full w-full bg-card p-4">
-      <div className="nodrag nopan nowheel h-full overflow-auto text-sm text-foreground" aria-label="文本节点内容">
+      {/* 正文占比铺满卡片，所以不能再标 .nodrag：React Flow 会丢弃落在 .nodrag 元素内的按下点，
+          整块标注就等于只剩 16px 内边距和标题条能拖。滚动改由 nowheel 保证。 */}
+      <div className="nowheel h-full overflow-auto text-sm text-foreground" aria-label="文本节点内容">
         <MessageResponse mode="static">{data.content || ""}</MessageResponse>
       </div>
     </NodeSurface>
