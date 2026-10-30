@@ -252,6 +252,11 @@ function downloadStatus(message: string): number | null {
   return Number.isInteger(status) ? status : null;
 }
 
+/** 任务记录 → 视图（服务端结果登记据此生成节点补丁，不信任浏览器传来的视图）。 */
+export function videoTaskView(record: VideoTaskRecord): VideoTaskView {
+  return toView(record);
+}
+
 function toView(record: VideoTaskRecord): VideoTaskView {
   return {
     taskId: record.taskId,

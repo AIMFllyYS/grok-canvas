@@ -199,6 +199,8 @@ const payloads = {
     claimId: entityId(),
     assets: z.array(assetRegistration()).max(16),
     patch: z.record(fieldName(), z.unknown()),
+    /** P2-08：result（默认）= 生成结果；start = 已占用的生成开始；select = 用户选择已有候选；fail = 客户端报告请求失败。 */
+    mode: z.enum(["result", "start", "select", "fail"]).optional(),
   }).superRefine((p, ctx) => {
     const fields = Object.keys(p.patch);
     if (!fields.length || fields.length > LIMITS.generationPatchFields) ctx.addIssue({ code: "custom", message: `生成补丁须含 1..${LIMITS.generationPatchFields} 个字段`, path: ["patch"] });

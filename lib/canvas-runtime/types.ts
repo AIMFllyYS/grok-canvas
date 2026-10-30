@@ -62,6 +62,7 @@ export type ApplyGenerationPayload = {
   claimId: string;
   assets: AssetRegistration[];
   patch: Record<string, unknown>;
+  mode?: "result" | "start" | "select" | "fail";
 };
 export type RenameCanvasPayload = { expectedVersion: number; name: string };
 

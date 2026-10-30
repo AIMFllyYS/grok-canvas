@@ -4,12 +4,13 @@ import { agentModel, agentProviderOptions } from "./model";
 import { compactContext } from "./context";
 import {
   readCanvas,
-  mutateCanvas,
   addNodes,
-  editNodes,
+  AGENT_TEXT_MAX_HEIGHT,
+  AGENT_TEXT_MAX_WIDTH,
   type CanvasNode,
   type CanvasEdge,
 } from "./canvas";
+import { agentAddNodes, agentEditNodes, agentGenerationWrite, agentPatchFields, AgentCommandError } from "../canvas-runtime/generation-commands";
 import {
   addFixedReferences,
   resolveCanvasReferences,
@@ -44,14 +45,14 @@ export function createCanvasTools(canvasId: string, origin: string) {
       throw new AgentError("当前画布中没有对应节点", 404);
     return { c, n };
   };
+  // 命令层错误转成 Agent 工具错误（状态码保持）。
+  const asAgent = async <T,>(work: Promise<T>): Promise<T> => {
+    try { return await work; }
+    catch (error) { if (error instanceof AgentCommandError) throw new AgentError(error.message, error.status); throw error; }
+  };
+  // Agent 触发的生成：开始/结果/失败/任务 ID 都是 apply_generation，在命令服务内核验占用与 generationId。
   const patchClaimed = async (nodeId: string, claimId: string, fields: Record<string, unknown>) =>
-    mutateCanvas(canvasId, c => {
-      if (c.generationClaims?.[nodeId]?.id !== claimId) throw new AgentError("生成任务已不再属于该节点", 409);
-      const current = (c.nodes as CanvasNode[]).find(item => item.id === nodeId);
-      if (!current) throw new AgentError("节点已删除", 409);
-      if (fields.status !== "running" && current.data.generationId !== claimId) throw new AgentError("节点已有更新的生成任务", 409);
-      Object.assign(current.data, fields);
-    });
+    asAgent(agentGenerationWrite(canvasId, nodeId, claimId, fields, fields.status === "running" ? "start" : fields.status === "failed" ? "fail" : "result"));
   return {
     read_canvas: tool({
       description:
@@ -80,10 +81,9 @@ export function createCanvasTools(canvasId: string, origin: string) {
           .max(20),
       }),
       execute: async ({ nodes }) => {
-        let added: CanvasNode[] = [];
-        await mutateCanvas(canvasId, (c) => {
-          added = addNodes(c, nodes);
-        });
+        // 放置用当前画布的索引算好（只在本地副本上），再以预分配 ID 的 add_nodes 原子提交。
+        const added = addNodes(await readCanvas(canvasId), nodes) as CanvasNode[];
+        await asAgent(agentAddNodes(canvasId, added));
         return {
           nodes: added.map((n) => ({
             id: n.id,
@@ -129,7 +129,8 @@ export function createCanvasTools(canvasId: string, origin: string) {
         disconnect: z.array(z.string()).max(40).default([]),
       }),
       execute: async (input) => {
-        const saved = await mutateCanvas(canvasId, (c) => editNodes(c, input));
+        await asAgent(agentEditNodes(canvasId, input, { maxTextWidth: AGENT_TEXT_MAX_WIDTH, maxTextHeight: AGENT_TEXT_MAX_HEIGHT }));
+        const saved = await readCanvas(canvasId);
         return {
           updated: input.updates.length,
           nodes: (saved.nodes as CanvasNode[]).filter(n => input.updates.some(u => u.id === n.id)).map(n => ({ id: n.id, position: n.position, width: n.width, height: n.height })),
@@ -150,20 +151,11 @@ export function createCanvasTools(canvasId: string, origin: string) {
         role: z.enum(["first", "last", "reference"]).default("reference"),
       }),
       execute: async ({ nodeId, assets, role }) => {
-        await mutateCanvas(canvasId, (c) => {
-          const n = (c.nodes as CanvasNode[]).find((n) => n.id === nodeId);
-          if (!n) throw new AgentError("节点不存在");
-          Object.assign(
-            n.data,
-            addFixedReferences(
-              n,
-              c.nodes as CanvasNode[],
-              c.edges as CanvasEdge[],
-              assets,
-              role,
-            ),
-          );
-        });
+        const c = await readCanvas(canvasId);
+        const n = (c.nodes as CanvasNode[]).find((n) => n.id === nodeId);
+        if (!n) throw new AgentError("节点不存在");
+        const fields = addFixedReferences(n, c.nodes as CanvasNode[], c.edges as CanvasEdge[], assets, role);
+        await asAgent(agentPatchFields(canvasId, nodeId, fields));
         return { nodeId, attached: assets.length, role };
       },
     }),
@@ -273,11 +265,10 @@ export function createCanvasTools(canvasId: string, origin: string) {
         )) as VideoTaskView;
         if (result.canvasId !== canvasId || result.nodeId !== nodeId)
           throw new AgentError("任务不属于当前节点");
-        await mutateCanvas(canvasId, doc => {
-          const current = (doc.nodes as CanvasNode[]).find(item => item.id === nodeId);
-          if (!current || (result.generationId && current.data.generationId !== result.generationId)) throw new AgentError("视频任务已过期", 409);
-          Object.assign(current.data, videoNodePatchFromView(result));
-        });
+        const generationId = result.generationId ?? (typeof n.data.generationId === "string" ? n.data.generationId : null);
+        if (!generationId) throw new AgentError("视频任务已过期", 409);
+        const written = await patchClaimed(nodeId, generationId, videoNodePatchFromView(result));
+        if (written.status === "unchanged" && result.generationId && n.data.generationId !== result.generationId) throw new AgentError("视频任务已过期", 409);
         return result;
       },
     }),
