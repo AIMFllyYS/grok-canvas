@@ -1,0 +1,35 @@
+{
+  "taskId": "P4-01",
+  "sourceCommit": "18870f3ae32bfcdfcf2448ddd7ce2d0947ce4bf8",
+  "status": "passed",
+  "baseCommit": "715b85bd",
+  "red": {
+    "command": "node --test tests/asset-range.test.mjs",
+    "exitCode": 1,
+    "assertion": "range.ts / asset-stream.ts 为只抛“未实现”的桩、资产路由为原 readFile 版本时 6/6 失败。"
+  },
+  "checks": [
+    {"command": "node --test tests/asset-range.test.mjs", "exitCode": 0, "evidence": "6/6：1000 字节 Range 矩阵 16 种头（无头/空/0-0/100-/-100/999-999/超长截断/大后缀/1000-/100-50/多 range/非数字/bytes=-/-0/非 bytes/超大整数）与 0 字节文件、非安全 size；GET 完整 200 长度准确、0-0 返回 1 字节与 bytes 0-0/1000、-100 返回最后 100 字节；越界/反向/多 range 416 与 bytes */1000、HEAD body=null 但长度正确（含 206）；ETag 格式、If-Range 不匹配回退 200、匹配 206、If-None-Match 304；8MiB 文件按块读取、reader.cancel 与请求 abort 后 close 事件触发且 Windows 下可立即重命名；路径穿越/伪造名/不存在 404，源码不含 readFile"},
+    {"command": "node --test tests/local-access.test.mjs", "exitCode": 0, "evidence": "同源守卫未变"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "11 个套件共 408 项（新增 test:media）"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "构建通过；tsconfig 副作用已还原"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "matrix": {
+    "200": "无 Range 头，或 If-Range 与 ETag 不匹配；Content-Length=文件大小",
+    "206": "bytes=a-b（b 超出截断到 size-1）、bytes=a-、bytes=-n（n 超出取整个文件）；Content-Range: bytes start-end/size",
+    "416": "多 range、非 bytes 单位、非数字、bytes=-、bytes=-0、start≥size、start>end、非安全整数、0 字节文件的任何 Range；Content-Range: bytes */size，Content-Length: 0",
+    "304": "If-None-Match 与 ETag 相同",
+    "404": "名称未通过 isSafeAssetName、文件不存在或不是普通文件",
+    "HEAD": "与 GET 相同的状态码与头，body 为 null，不打开文件流"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P4-01 manual=false；服务单元测试不代表播放器兼容验收"},
+  "act": "首轮即全部通过（红灯阶段的路由备份因 PowerShell 把 [name] 当通配符未成功，已重写路由并复验）。ETag 取文件大小与修改时间（资产文件不可变），不依据用户可变的节点状态；If-Range 只接受强 ETag 精确匹配，避免客户端拼接不同版本。读取中途出错时 Web 流以错误结束，不会被当作完整 200。未改收费生成与下载接口。",
+  "risks": [
+    "播放器兼容（Chromium/Electron 视频 seek）未在本 Issue 实测，P4-03 的媒体调度与人工签收覆盖。",
+    "未实现多 range（按 C7 明确返回 416）。"
+  ],
+  "next": "P4-02"
+}
