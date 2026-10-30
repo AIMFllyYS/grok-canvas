@@ -2,9 +2,9 @@
 
 import { ControlButton } from "@/components/ui/control-button";
 
-import { memo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useNodesData, useReactFlow, useStore, useViewport } from "@xyflow/react";
+import { useNodeConnections, useNodesData, useReactFlow, useStore, useViewport, type Edge, type ReactFlowState } from "@xyflow/react";
 import { Tooltip } from "@base-ui/react/tooltip";
 import { SettingsPicker, QualitySwitch, CountPicker, DurationPicker, VideoSettingsPicker, AudioSwitch, type VideoSettingsPatch } from "./generation-settings";
 import { ArrowUp, Loader2, Plus, X } from "lucide-react";
@@ -33,6 +33,23 @@ import { LIBRARY_SOURCE_LABELS } from "@/lib/canvas-library";
 import { useEditLease } from "./use-edit-lease";
 
 const PANEL_WIDTH = 560;
+
+/** 只查询目标入边及来源数据；位置变化不会使内容订阅失效。 */
+function useIncomingReferences(nodeId: string) {
+  const connections = useNodeConnections({ id: nodeId, handleType: "target" });
+  const selectEdges = useCallback((state: ReactFlowState) => connections.flatMap(connection => {
+    const edge = state.edgeLookup.get(connection.edgeId);
+    return edge ? [edge] : [];
+  }), [connections]);
+  const edges = useStore(selectEdges, (a, b) => a.length === b.length && a.every((edge, index) => edge === b[index]));
+  const sourceIds = useMemo(() => [...new Set(connections.map(connection => connection.source))], [connections]);
+  const sourceNodes = useNodesData(sourceIds);
+  const incomingEdges = useMemo(() => {
+    const types = new Map(sourceNodes.map(node => [node.id, node.type]));
+    return edges.filter((edge: Edge) => types.get(edge.source) !== "canvasText");
+  }, [edges, sourceNodes]);
+  return { incomingEdges, sourceNodes };
+}
 
 
 // memo 隔离拖动视口引发的每帧重渲染：定位外壳跟着视口更新，面板内容只在节点数据变化时更新
@@ -79,10 +96,7 @@ const PanelBody = memo(function PanelBody({ nodeId, data }: { nodeId: string; da
 
   const showRestore = hasImage && data.draftPrompt != null && data.draftPrompt.trim() !== data.prompt.trim();
 
-  const allEdges = useStore((state) => state.edges);
-  const allNodes = useStore((state) => state.nodes);
-  const incomingEdges = allEdges.filter((edge) => edge.target === nodeId && allNodes.find(node => node.id === edge.source)?.type !== "canvasText");
-  const sourceNodes = useNodesData(incomingEdges.map((edge) => edge.source));
+  const { incomingEdges, sourceNodes } = useIncomingReferences(nodeId);
   const edgeAttachments = incomingEdges.map(edge => ({
     edgeId: edge.id,
     assetName: sourceNodes.find(source => source.id === edge.source)?.data?.assetName as string | undefined,
@@ -256,10 +270,7 @@ const VideoPanelBody = memo(function VideoPanelBody({ nodeId, data }: { nodeId: 
   const [localResolution, setLocalResolution] = useState(data.resolution);
   const [localAudio, setLocalAudio] = useState(data.audio);
 
-  const allEdges = useStore((state) => state.edges);
-  const allNodes = useStore((state) => state.nodes);
-  const incomingEdges = allEdges.filter((edge) => edge.target === nodeId && allNodes.find(node => node.id === edge.source)?.type !== "canvasText");
-  const sourceNodes = useNodesData(incomingEdges.map((edge) => edge.source));
+  const { incomingEdges, sourceNodes } = useIncomingReferences(nodeId);
   const uploadInputs = data.uploadInputs ?? [];
   const slots: VideoSlot[] = [
     ...incomingEdges.map((edge, index) => ({
@@ -466,11 +477,11 @@ export function PromptPanel() {
   );
 }
 
-function TextPanelBody({ nodeId, content }: { nodeId: string; content: string }) {
+const TextPanelBody = memo(function TextPanelBody({ nodeId, content }: { nodeId: string; content: string }) {
   const { updateNodeData } = useReactFlow();
   const lease = useEditLease(nodeId, "content");
   return <textarea aria-label="编辑文本节点" placeholder="输入 Markdown 文本" value={content}
     {...lease}
     onChange={event => updateNodeData(nodeId, { content: event.target.value })}
     className="ui-prompt-editor nodrag nopan nowheel min-h-24 max-h-60 w-full resize-y bg-transparent px-1 py-2 text-base outline-none" />;
-}
+});

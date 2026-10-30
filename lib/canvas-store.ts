@@ -152,12 +152,21 @@ async function writeCanvas(doc: Omit<CanvasDoc, "revision" | "updatedAt">, curre
 
 /** Run a synchronous edit against the latest canvas under the same lock as saves and deletes. */
 export async function updateCanvas(id: string, edit: (doc: CanvasDoc) => void | false): Promise<CanvasDoc | null> {
+  return transformCanvas(id, current => {
+    const next = structuredClone(current);
+    return edit(next) === false ? current : next;
+  });
+}
+
+/** 不可变命令入口，与旧修改入口共用写锁；返回原引用表示已处理，不再写盘。 */
+export async function transformCanvas(id: string, edit: (doc: CanvasDoc) => CanvasDoc): Promise<CanvasDoc | null> {
   return withCanvasLock(id, async () => {
     if (deletedIds.has(id)) return null;
     const current = await loadCanvas(id);
     if (!current) return null;
-    const next = structuredClone(current);
-    if (edit(next) === false) return current;
+    const next = edit(current);
+    if (next === current) return current;
+    if (next.id !== id) throw new Error("命令不能更改画布 ID");
     return writeCanvas(next, current, current.revision);
   });
 }

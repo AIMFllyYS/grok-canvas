@@ -14,10 +14,28 @@ export function validateImageReferences(values: unknown): string[] {
   return assets;
 }
 
-export function resolveCanvasReferences(node: ReferenceNode, nodes: ReferenceNode[], edges: ReferenceEdge[]): ResolvedReferences {
+export type ReferenceIndex = {
+  nodeById: ReadonlyMap<string, ReferenceNode>;
+  incomingByNode: ReadonlyMap<string, readonly ReferenceEdge[]>;
+};
+
+/** 同一文档校验批次只构建一次；结构变化后必须重新构建，不能缓存旧快照。 */
+export function createReferenceIndex(nodes: readonly ReferenceNode[], edges: readonly ReferenceEdge[]): ReferenceIndex {
+  const nodeById = new Map<string, ReferenceNode>();
+  const incomingByNode = new Map<string, ReferenceEdge[]>();
+  for (const node of nodes) nodeById.set(node.id, node);
+  for (const edge of edges) {
+    const incoming = incomingByNode.get(edge.target);
+    if (incoming) incoming.push(edge);
+    else incomingByNode.set(edge.target, [edge]);
+  }
+  return { nodeById, incomingByNode };
+}
+
+export function resolveCanvasReferences(node: ReferenceNode, nodes: ReferenceNode[], edges: ReferenceEdge[], index?: ReferenceIndex): ResolvedReferences {
   const video = node.type === "video";
-  const incoming = edges.filter(edge => edge.target === node.id);
-  const byId = new Map(nodes.map(source => [source.id, source]));
+  const incoming = index ? index.incomingByNode.get(node.id) ?? [] : edges.filter(edge => edge.target === node.id);
+  const byId = index?.nodeById ?? new Map(nodes.map(source => [source.id, source]));
   const names = { ...node.data.attachmentNames as Record<string, string> | undefined };
   const inputs: VideoInput[] = [];
   const pendingRoles: VideoInputRole[] = [];

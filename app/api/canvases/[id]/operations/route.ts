@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { applyCanvasOperations, CanvasOperationConflict, type CanvasOperation } from "@/lib/canvas-operations";
-import { isSafeCanvasId, updateCanvas } from "@/lib/canvas-store";
+import { isSafeCanvasId, transformCanvas } from "@/lib/canvas-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +26,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return NextResponse.json({ error: { kind: "bad_request", message: "画布操作格式无效" } }, { status: 400 });
   }
   try {
-    const saved = await updateCanvas(id, doc => { Object.assign(doc, applyCanvasOperations(doc, operations)); });
+    const saved = await transformCanvas(id, doc => applyCanvasOperations(doc, operations));
     if (!saved) return NextResponse.json({ error: { kind: "not_found", message: "画布不存在" } }, { status: 404 });
     return NextResponse.json(saved);
   } catch (error) {

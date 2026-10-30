@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { useStore, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
+import { sameNodeView } from "@/lib/canvas-runtime/node-view";
+import { Position, type Node, type NodeProps } from "@xyflow/react";
 import { NodeSurface } from "@/components/ui/node-surface";
 import { StatusFeedback } from "@/components/ui/status-feedback";
 import { useAuth } from "@/components/auth-status";
@@ -70,10 +71,9 @@ export function defaultVideoNodeData(name: string): VideoNodeData {
   };
 }
 
-export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlowNode>) {
+export const VideoNode = memo(function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlowNode>) {
   const { generateVideo } = useCanvasActions();
   const { loggedIn, login } = useAuth();
-  const zoom = useStore((state) => state.transform[2]);
   const running = data.status === "running";
   const failedFeedback = generationStatusFeedback(loggedIn);
   const [ratio, setRatio] = useState<number | null>(null);
@@ -139,7 +139,7 @@ export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlow
         <Video className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <NodeTitle nodeId={id} name={data.name} />
       </div>
-      <NodeSurface selected={selected} zoom={zoom} className="relative flex items-center justify-center" style={boxStyle}>
+      <NodeSurface selected={selected} className="relative flex items-center justify-center" style={boxStyle}>
         {data.assetName ? (
           <div className="group/video relative h-full w-full">
             <video
@@ -213,4 +213,4 @@ export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlow
       </NodeSurface>
     </div>
   );
-}
+}, sameNodeView);

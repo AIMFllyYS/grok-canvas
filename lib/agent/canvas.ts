@@ -1,6 +1,6 @@
 import { loadCanvas, updateCanvas, type CanvasDoc } from "../canvas-store";
-import { resolveCanvasReferences } from "../canvas-references";
-import { placeNewNode } from "../node-placement";
+import { createReferenceIndex, resolveCanvasReferences } from "../canvas-references";
+import { createPlacementIndex, placeNewNode } from "../node-placement";
 import { AgentError } from "./store";
 import { diffCanvasOperations } from "../canvas-operations";
 import { editLeaseActive } from "../canvas-edit-leases";
@@ -54,11 +54,12 @@ export function addNodes(
   }[],
 ) {
   const nodes = c.nodes as CanvasNode[];
+  const placement = createPlacementIndex(nodes);
   const added = items.map((item) => {
     const size = item.type === "canvasText"
       ? { width: Math.min(item.width ?? 360, AGENT_TEXT_MAX_WIDTH), height: Math.min(item.height ?? 260, AGENT_TEXT_MAX_HEIGHT) }
       : { width: 304, height: 264 };
-    const position = placeNewNode({ x: item.x ?? 0, y: item.y ?? 0 }, nodes, size);
+    const position = placeNewNode({ x: item.x ?? 0, y: item.y ?? 0 }, nodes, size, placement);
     const n = {
       id: crypto.randomUUID(),
       type: item.type,
@@ -80,6 +81,7 @@ export function addNodes(
       },
     };
     nodes.push(n);
+    placement.add(n);
     return n;
   });
   return added;
@@ -165,12 +167,14 @@ export function editNodes(
       });
   }
   copy.edges = edges;
+  const referenceIndex = createReferenceIndex(copy.nodes as CanvasNode[], edges);
   for (const n of copy.nodes as CanvasNode[])
     if (["image", "video"].includes(n.type))
       resolveCanvasReferences(
         n,
         copy.nodes as CanvasNode[],
         copy.edges as CanvasEdge[],
+        referenceIndex,
       );
   Object.assign(c, copy);
 }

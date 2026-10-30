@@ -1,6 +1,8 @@
 "use client";
 
-import { useStore, Position, type NodeProps, type Node } from "@xyflow/react";
+import { memo } from "react";
+import { sameNodeView } from "@/lib/canvas-runtime/node-view";
+import { Position, type NodeProps, type Node } from "@xyflow/react";
 import { AssetImage } from "@/components/ui/asset-image";
 import { NodeSurface } from "@/components/ui/node-surface";
 import { ImageIcon } from "lucide-react";
@@ -17,8 +19,7 @@ export type AssetNodeData = {
 export type AssetFlowNode = Node<AssetNodeData, "asset">;
 
 /** Uploaded material: a pure image reference, no panel and no generation. */
-export function AssetNode({ id, data, selected, draggable }: NodeProps<AssetFlowNode>) {
-  const zoom = useStore(state => state.transform[2]);
+export const AssetNode = memo(function AssetNode({ id, data, selected, draggable }: NodeProps<AssetFlowNode>) {
   return (
     <div className="group relative">
       <NodeActions id={id} name={data.name} assetName={data.assetName} selected={selected} pinned={draggable === false} />
@@ -28,7 +29,7 @@ export function AssetNode({ id, data, selected, draggable }: NodeProps<AssetFlow
         <ImageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <NodeTitle nodeId={id} name={data.name} />
       </div>
-      <NodeSurface selected={selected} zoom={zoom} className="w-[220px]">
+      <NodeSurface selected={selected} className="w-[220px]">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <AssetImage
           src={`/api/assets/${data.assetName}`}
@@ -38,4 +39,4 @@ export function AssetNode({ id, data, selected, draggable }: NodeProps<AssetFlow
       </NodeSurface>
     </div>
   );
-}
+}, sameNodeView);

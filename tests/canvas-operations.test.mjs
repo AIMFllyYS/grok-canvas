@@ -51,3 +51,50 @@ test("选中和测量状态不会影响删除条件或被新节点持久化", ()
   assert.equal("selected" in saved.nodes.at(-1), false);
   assert.equal("measured" in saved.nodes.at(-1), false);
 });
+
+test("局部操作保留未变实体及正文引用，只复制被写路径", () => {
+  const current = doc();
+  current.nodes[0].position = { x: 0, y: 0 };
+  const result = applyCanvasOperations(current, [{ ...op("move", "x", 0, 10), path: ["position", "x"] }]);
+  assert.notEqual(result.nodes[0], current.nodes[0]);
+  assert.equal(result.nodes[0].data, current.nodes[0].data);
+  assert.equal(result.nodes[1], current.nodes[1]);
+  assert.equal(result.edges, current.edges);
+  assert.equal(result.viewport, current.viewport);
+  assert.equal(current.nodes[0].position.x, 0);
+});
+
+test("位置修改和引用相同的差异比较不读取长正文", () => {
+  const current = doc();
+  current.nodes[0].type = "canvasText";
+  current.nodes[0].position = { x: 0, y: 0 };
+  current.nodes[0].data = new Proxy({ content: "长文" }, { ownKeys() { throw new Error("禁止扫描正文"); } });
+  const operation = { ...op("move", "x", 0, 10), path: ["position", "x"] };
+  const result = applyCanvasOperations(current, [operation]);
+  assert.equal(result.nodes[0].data, current.nodes[0].data);
+  assert.deepEqual(diffCanvasOperations(current, result, () => "move"), [operation]);
+});
+
+test("批次后段冲突时所有前段改动均不影响原文档或操作输入", () => {
+  const current = doc();
+  const first = op("one", "content", "old", "new");
+  const second = op("two", "name", "错误前置值", "bad");
+  assert.throws(() => applyCanvasOperations(current, [first, second]), /已被修改/);
+  assert.equal(current.nodes[0].data.content, "old");
+  const add = { id: "add", target: "node", entityId: "new", path: [], before: { exists: false }, after: { exists: true, value: { id: "new", data: { content: "a" } } } };
+  const patch = { ...op("patch", "content", "a", "b"), entityId: "new" };
+  const result = applyCanvasOperations(current, [add, patch]);
+  assert.equal(add.after.value.data.content, "a");
+  assert.equal(result.nodes.at(-1).data.content, "b");
+  add.after.value.data.content = "changed";
+  assert.equal(result.nodes.at(-1).data.content, "b");
+});
+
+test("重复回执不产生新的文档，批量增删后仍可按 ID 修改", () => {
+  const current = applyCanvasOperations(doc(), [op("one", "content", "old", "new")]);
+  assert.equal(applyCanvasOperations(current, [op("one", "content", "old", "new")]), current);
+  const removal = { id: "remove", target: "node", entityId: "n", path: [], before: { exists: true, value: current.nodes[0] }, after: { exists: false } };
+  const result = applyCanvasOperations(current, [removal, { ...op("other", "content", "", "m"), entityId: "m", before: { exists: false } }]);
+  assert.equal(result.nodes.length, 1);
+  assert.equal(result.nodes[0].data.content, "m");
+});

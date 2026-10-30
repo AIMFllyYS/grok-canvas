@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type ComponentProps, type CSSProperties } from "react";
-import { useStore, Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useState, type ComponentProps, type CSSProperties } from "react";
+import { sameNodeView } from "@/lib/canvas-runtime/node-view";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { AssetImage } from "@/components/ui/asset-image";
 import { ControlButton } from "@/components/ui/control-button";
 import { NodeSurface } from "@/components/ui/node-surface";
@@ -81,10 +82,9 @@ export function defaultImageNodeData(name: string): ImageNodeData {
   };
 }
 
-export function ImageNode({ id, data, selected, draggable }: NodeProps<ImageFlowNode>) {
+export const ImageNode = memo(function ImageNode({ id, data, selected, draggable }: NodeProps<ImageFlowNode>) {
   const { generate, openCandidates, closeCandidates, copyCandidateAsNode, expandedNodeId } = useCanvasActions();
   const { loggedIn, login } = useAuth();
-  const zoom = useStore(state => state.transform[2]);
   const running = data.status === "running";
   const failedFeedback = generationStatusFeedback(loggedIn);
   const [ratio, setRatio] = useState<number | null>(null);
@@ -128,7 +128,7 @@ export function ImageNode({ id, data, selected, draggable }: NodeProps<ImageFlow
         </>
       ) : null}
 
-      <NodeSurface selected={selected} zoom={zoom} className="relative flex items-center justify-center" style={boxStyle}>
+      <NodeSurface selected={selected} className="relative flex items-center justify-center" style={boxStyle}>
         {data.assetName ? (
           // eslint-disable-next-line @next/next/no-img-element
           <AssetImage
@@ -210,4 +210,4 @@ export function ImageNode({ id, data, selected, draggable }: NodeProps<ImageFlow
       </NodeSurface>
     </div>
   );
-}
+}, sameNodeView);

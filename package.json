@@ -36,7 +36,7 @@
     "test:auth": "node --test tests/oauth.test.mjs",
     "test:video": "node --experimental-strip-types --test tests/video-references.test.mjs tests/video-request.test.mjs tests/video-tasks.test.mjs tests/video-route.test.mjs tests/video-runtime.test.mjs",
     "test:security": "node --experimental-strip-types --test tests/local-access.test.mjs",
-    "test:workspace": "node --test tests/workspace-preferences.test.mjs tests/account-display.test.mjs tests/canvas-interaction.test.mjs tests/usage.test.mjs tests/canvas-library.test.mjs tests/canvas-references.test.mjs tests/canvas-store.test.mjs tests/canvas-operations.test.mjs tests/canvas-route.test.mjs tests/canvas-persistence.test.mjs tests/asset-upload.test.mjs tests/prompt-editor.test.mjs tests/asset-drag.test.mjs tests/desktop-runtime.test.mjs tests/desktop-bridge.test.mjs",
+    "test:workspace": "node --test tests/workspace-preferences.test.mjs tests/account-display.test.mjs tests/canvas-interaction.test.mjs tests/canvas-performance.test.mjs tests/usage.test.mjs tests/canvas-library.test.mjs tests/canvas-references.test.mjs tests/canvas-store.test.mjs tests/canvas-operations.test.mjs tests/canvas-route.test.mjs tests/canvas-persistence.test.mjs tests/asset-upload.test.mjs tests/prompt-editor.test.mjs tests/asset-drag.test.mjs tests/desktop-runtime.test.mjs tests/desktop-bridge.test.mjs",
     "test:agent": "node --test tests/agent.test.mjs tests/agent-sdk.test.mjs"
   },
   "build": {
@@ -61,7 +61,10 @@
       {
         "from": "components/ai-elements",
         "to": "licenses/ai-elements",
-        "filter": ["LICENSE", "LICENSE-APACHE-2.0"]
+        "filter": [
+          "LICENSE",
+          "LICENSE-APACHE-2.0"
+        ]
       }
     ],
     "win": {
@@ -121,6 +124,7 @@
     "concurrently": "^10.0.6",
     "electron": "^45.0.0",
     "electron-builder": "^26.18.0",
+    "fake-indexeddb": "^6.2.7",
     "typescript": "^5.9.3",
     "wait-on": "^9.5.1"
   }

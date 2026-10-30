@@ -17,6 +17,8 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  type NodeChange,
+  type EdgeChange,
   type Connection,
   type Edge,
   type Node,
@@ -31,9 +33,11 @@ import { useWorkspacePreferences } from "../workspace-preferences";
 import { interactionConfig, interactionShortcut, type InteractionMode } from "@/lib/canvas-interaction";
 import { assetsFromOutcome, collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets, type CanvasLibraryAsset, type CanvasLibrarySource } from "@/lib/canvas-library";
 import { canvasSaveBody } from "@/lib/canvas-document";
+import { createChangeTracker, waitForGestureIdle, versionAfterCommit } from "@/lib/canvas-runtime/change-tracker";
+import { createGeometryJournal, restoreGeometry, type GeometryCheckpoint } from "@/lib/canvas-runtime/geometry-journal";
 import { applyCanvasOperations, diffCanvasOperations, readCanvasOperationValue, type CanvasOperation } from "@/lib/canvas-operations";
 import { generationClaim } from "@/lib/generation-claim-client";
-import { canvasDraftKey, clearCanvasDraft, loadCanvasDraft, saveCanvasDraft } from "@/lib/canvas-drafts";
+import { canvasDraftKey, clearCanvasDraft, loadCanvasDraft, saveCanvasDraft, loadGeometryCheckpoints, saveGeometryCheckpoint } from "@/lib/canvas-drafts";
 import { persistImageOutcome, persistVideoOutcome } from "@/lib/canvas-persistence";
 import { addFixedReferences, resolveCanvasReferences } from "@/lib/canvas-references";
 import { uploadAssets, type UploadProgress, type UploadedAsset } from "@/lib/asset-upload";
@@ -78,6 +82,7 @@ import { CanvasToolbar } from "./canvas-toolbar";
 import { CanvasEmptyState } from "./canvas-empty-state";
 import { CandidatePanel } from "./candidate-panel";
 import { PromptPanel } from "./prompt-panel";
+import { CanvasZoomStyle } from "./canvas-zoom-style";
 import { FloatingMenu, MenuItem as MenuButton } from "@/components/ui/floating-menu";
 import { ControlButton } from "@/components/ui/control-button";
 import { ScissorEdge } from "./scissor-edge";
@@ -294,8 +299,26 @@ export function FlowCanvas({
   const savedVersion = useRef(0);
   const mounted = useRef(true);
   const { loggedIn, refresh: refreshAuth } = useAuth();
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(doc.nodes as Node[]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(doc.edges as Edge[]);
+  const [changes] = useState(createChangeTracker);
+  const [geometry] = useState(() => createGeometryJournal());
+  const [nodes, setNodesFromSync, applyNodesChange] = useNodesState<Node>(doc.nodes as Node[]);
+  const [edges, setEdgesFromSync, applyEdgesChange] = useEdgesState<Edge>(doc.edges as Edge[]);
+  const setNodes = useCallback<typeof setNodesFromSync>((value) => {
+    changes.mutate();
+    setNodesFromSync(value);
+  }, [changes, setNodesFromSync]);
+  const setEdges = useCallback<typeof setEdgesFromSync>((value) => {
+    changes.mutate(false);
+    setEdgesFromSync(value);
+  }, [changes, setEdgesFromSync]);
+  const onNodesChange = useCallback((items: NodeChange<Node>[]) => {
+    changes.nodes(items);
+    applyNodesChange(items);
+  }, [changes, applyNodesChange]);
+  const onEdgesChange = useCallback((items: EdgeChange<Edge>[]) => {
+    changes.edges(items);
+    applyEdgesChange(items);
+  }, [changes, applyEdgesChange]);
   const [menu, setMenu] = useState<MenuState>(null);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
   // 同时只展开一个候选面板；展开时收起提示词面板
@@ -372,7 +395,6 @@ export function FlowCanvas({
     pushUndo({ type: "add", nodes: addedNodes, edges: addedEdges });
     redoStackRef.current = [];
   }, [pushUndo]);
-  const dragStartRef = useRef<Array<{ id: string; x: number; y: number }>>([]);
 
   const revisionRef = useRef(doc.revision);
   const acknowledgedRef = useRef<CanvasDoc>(baseline);
@@ -390,9 +412,14 @@ export function FlowCanvas({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savingRef = useRef(false);
   const saveOkRef = useRef(true);
+  const checkpointFailedRef = useRef(false);
   const latestRef = useRef({ nodes, edges });
   latestRef.current = { nodes, edges };
-  const skipInitialSaveRef = useRef(true);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearDraftTimer = useCallback(() => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = null;
+  }, []);
   const onSaveStatusRef = useRef(onSaveStatus);
   onSaveStatusRef.current = onSaveStatus;
 
@@ -404,14 +431,33 @@ export function FlowCanvas({
     }
   };
 
+  const persistGeometry = useCallback((checkpoint: GeometryCheckpoint | null) => {
+    if (!checkpoint || !draftReadyRef.current) return;
+    void saveGeometryCheckpoint(draftKeyRef.current, doc.id, checkpoint).catch(() => {
+      if (!checkpointFailedRef.current) {
+        checkpointFailedRef.current = true;
+        reportSave({ ok: false, message: "坐标检查点写入失败，请保持页面打开并重试保存" });
+      }
+    });
+  }, [doc.id]);
+  const finishGeometry = useCallback((draggedNodes?: Node[]) => {
+    if (draggedNodes) geometry.update(draggedNodes);
+    const checkpoint = geometry.finish();
+    persistGeometry(checkpoint);
+    const items = checkpoint?.moves.filter(move => move.from.x !== move.to.x || move.from.y !== move.to.y) ?? [];
+    if (items.length) { pushUndo({ type: "move", items }); redoStackRef.current = []; }
+  }, [geometry, persistGeometry, pushUndo]);
+
   // ---- 持久化：500ms 防抖自动保存 ----
   const save = useCallback(async () => {
-    if (savingRef.current || !draftReadyRef.current) {
+    if (savingRef.current || !draftReadyRef.current || changes.active()) {
       return;
     }
+    clearDraftTimer();
     savingRef.current = true;
     const version = dirtyVersion.current;
     const viewportVersion = viewportVersionRef.current;
+    const checkpointThrough = geometry.through();
     try {
       const snapshot = canvasSaveBody(docRef.current, {
         revision: revisionRef.current,
@@ -427,7 +473,8 @@ export function FlowCanvas({
       };
       if (batch.operations.length) {
         inFlightOperationsRef.current = batch;
-        await saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: acknowledgedRef.current, working: snapshot, pending: batch });
+        await saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: acknowledgedRef.current, working: snapshot, pending: batch, checkpointThrough });
+        if (!await waitForGestureIdle(changes, () => mounted.current)) return;
       }
       let response = batch.operations.length
         ? await fetch(`/api/canvases/${doc.id}/operations`, {
@@ -436,13 +483,17 @@ export function FlowCanvas({
             body: JSON.stringify({ operations: batch.operations }),
           })
         : await fetch(`/api/canvases/${doc.id}?background=1&sinceRevision=${acknowledgedRef.current.revision}`, { cache: "no-store" });
+      // 在途响应不得在新的手势中途重建整图或回写坐标。
+      if (!await waitForGestureIdle(changes, () => mounted.current)) return;
       if (response.status === 304) {
+        dirtyVersion.current = versionAfterCommit(version, dirtyVersion.current, changes.dirty());
         savedVersion.current = version;
-        if (dirtyVersion.current === version) await clearCanvasDraft(draftKeyRef.current);
+        if (dirtyVersion.current === version) await clearCanvasDraft(draftKeyRef.current, checkpointThrough);
         reportSave({ ok: true });
         return;
       }
       let payload = (await response.json()) as CanvasDoc & { error?: { message: string; operationId?: string } };
+      if (!await waitForGestureIdle(changes, () => mounted.current)) return;
       // A user's active text draft wins over an Agent edit that reached disk first.
       for (let attempt = 0; response.status === 409 && attempt < 20; attempt++) {
         const conflict = batch.operations.find(op => op.id === payload.error?.operationId);
@@ -450,14 +501,17 @@ export function FlowCanvas({
         const latestResponse = await fetch(`/api/canvases/${doc.id}?background=1`, { cache: "no-store" });
         if (!latestResponse.ok) break;
         const latest = await latestResponse.json() as CanvasDoc;
+        if (!await waitForGestureIdle(changes, () => mounted.current)) return;
         const before = readCanvasOperationValue(latest, conflict);
         if (!before) break;
         batch = { ...batch, operations: batch.operations.map(op => op.id === conflict.id ? { ...op, id: crypto.randomUUID(), before } : op) };
         inFlightOperationsRef.current = batch;
         const working = canvasSaveBody(docRef.current, { viewport: viewportDirtyRef.current ? viewportRef.current : acknowledgedRef.current.viewport, nodes: latestRef.current.nodes, edges: latestRef.current.edges, libraryAssets: libraryRef.current });
-        await saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: acknowledgedRef.current, working, pending: batch });
+        await saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: acknowledgedRef.current, working, pending: batch, checkpointThrough: geometry.through() });
+        if (!await waitForGestureIdle(changes, () => mounted.current)) return;
         response = await fetch(`/api/canvases/${doc.id}/operations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operations: batch.operations }) });
         payload = await response.json() as typeof payload;
+        if (!await waitForGestureIdle(changes, () => mounted.current)) return;
       }
       if (response.ok) {
         for (const operation of diffCanvasOperations(batch.snapshot, payload)) {
@@ -470,7 +524,9 @@ export function FlowCanvas({
           }
         }
         const current = canvasSaveBody(docRef.current, { viewport: viewportDirtyRef.current ? viewportRef.current : acknowledgedRef.current.viewport, nodes: latestRef.current.nodes, edges: latestRef.current.edges, libraryAssets: libraryRef.current });
+        const currentCheckpointThrough = geometry.through();
         const pending = diffCanvasOperations(batch.snapshot, current);
+        dirtyVersion.current = versionAfterCommit(version, dirtyVersion.current, pending.length > 0);
         const reconciled = pending.length ? applyCanvasOperations(payload, pending) : payload;
         const currentNodes = new Map(latestRef.current.nodes.map(node => [node.id, node]));
         const currentEdges = new Map(latestRef.current.edges.map(edge => [edge.id, edge]));
@@ -495,11 +551,13 @@ export function FlowCanvas({
         const edgesChanged = JSON.stringify(mergedEdges) !== JSON.stringify(latestRef.current.edges);
         latestRef.current = { nodes: mergedNodes, edges: mergedEdges };
         if (mounted.current) {
-          if (nodesChanged) setNodes(mergedNodes);
-          if (edgesChanged) setEdges(mergedEdges);
+          if (nodesChanged) setNodesFromSync(mergedNodes);
+          if (edgesChanged) setEdgesFromSync(mergedEdges);
         }
-        if (dirtyVersion.current === version) await clearCanvasDraft(draftKeyRef.current);
-        else await saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: payload, working: current, pending: null });
+        if (dirtyVersion.current === version) await clearCanvasDraft(draftKeyRef.current, checkpointThrough);
+        else await saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: payload, working: current, pending: null, checkpointThrough: currentCheckpointThrough });
+        if (!await waitForGestureIdle(changes, () => mounted.current)) return;
+        checkpointFailedRef.current = false;
         const merged = mergeLibraryAssets(libraryRef.current, normalizeLibraryAssets(payload.libraryAssets));
         if (merged !== libraryRef.current && mounted.current) { libraryRef.current = merged; setLibraryAssets(merged); }
         reportSave({ ok: true });
@@ -521,23 +579,26 @@ export function FlowCanvas({
         saveTimerRef.current = setTimeout(() => void save(), 500);
       }
     }
-  }, [doc]);
+  }, [doc.id, changes, geometry, clearDraftTimer, setNodesFromSync, setEdgesFromSync]);
 
   const scheduleSave = useCallback(() => {
     dirtyVersion.current++;
-    if (draftReadyRef.current) {
-      const working = canvasSaveBody(docRef.current, { viewport: viewportDirtyRef.current ? viewportRef.current : acknowledgedRef.current.viewport, nodes: latestRef.current.nodes, edges: latestRef.current.edges, libraryAssets: libraryRef.current });
-      void saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: acknowledgedRef.current, working, pending: inFlightOperationsRef.current }).catch(() => reportSave({ ok: false, message: "本地草稿保存失败，请检查本地存储" }));
+    // 草稿采样有界，避免每个按键／拖动更新都克隆完整文档。
+    if (draftReadyRef.current && !changes.active() && !draftTimerRef.current) {
+      draftTimerRef.current = setTimeout(() => {
+        draftTimerRef.current = null;
+        if (!mounted.current || changes.active() || !draftReadyRef.current) return;
+        const working = { ...docRef.current, viewport: viewportDirtyRef.current ? viewportRef.current : acknowledgedRef.current.viewport, nodes: latestRef.current.nodes, edges: latestRef.current.edges, libraryAssets: libraryRef.current };
+        void saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: acknowledgedRef.current, working, pending: inFlightOperationsRef.current, checkpointThrough: geometry.through() }).catch(() => reportSave({ ok: false, message: "本地草稿保存失败，请检查本地存储" }));
+      }, 200);
     }
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-    }
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => void save(), 500);
-  }, [save]);
+  }, [save, changes, geometry, doc.id]);
 
   // 切换画布前调用：停掉防抖、等在途保存、把最新状态落盘，返回是否成功
   const flushSave = useCallback(async (): Promise<boolean> => {
-    if (!draftReadyRef.current) return false;
+    if (!draftReadyRef.current || changes.active()) return false;
     while (pendingUploads.current.size) await Promise.allSettled([...pendingUploads.current]);
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
@@ -547,8 +608,8 @@ export function FlowCanvas({
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     await save();
-    return saveOkRef.current;
-  }, [save]);
+    return saveOkRef.current && !changes.active() && !changes.dirty() && dirtyVersion.current === savedVersion.current;
+  }, [save, changes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -556,16 +617,24 @@ export function FlowCanvas({
       try {
         const key = canvasDraftKey(doc.id);
         draftKeyRef.current = key;
-        const draft = await loadCanvasDraft(key);
+        let draft = await loadCanvasDraft(key);
+        const checkpoints = await loadGeometryCheckpoints(key, doc.id);
         if (cancelled) return;
+        if (checkpoints.length) {
+          const recovered = restoreGeometry(draft?.working ?? docRef.current, checkpoints);
+          if (recovered.conflicts.length) throw new Error(`坐标恢复冲突（${recovered.conflicts.length} 个节点），原检查点已保留，未覆盖已保存位置`);
+          for (const checkpoint of checkpoints) geometry.advance(checkpoint.sequence);
+          draft = { key, canvasId: doc.id, base: draft?.base ?? acknowledgedRef.current, working: recovered.document, pending: draft?.pending };
+        }
         if (draft && draft.canvasId === doc.id && draft.base?.id === doc.id && draft.working?.id === doc.id) {
           acknowledgedRef.current = draft.base;
           revisionRef.current = draft.base.revision;
           inFlightOperationsRef.current = draft.pending ?? null;
           const restoredNodes = draft.working.nodes as Node[], restoredEdges = draft.working.edges as Edge[];
           latestRef.current = { nodes: restoredNodes, edges: restoredEdges };
-          setNodes(restoredNodes);
-          setEdges(restoredEdges);
+          setNodesFromSync(restoredNodes);
+          setEdgesFromSync(restoredEdges);
+          changes.mutate();
           libraryRef.current = normalizeLibraryAssets(draft.working.libraryAssets);
           setLibraryAssets(libraryRef.current);
           viewportRef.current = draft.working.viewport;
@@ -575,15 +644,14 @@ export function FlowCanvas({
           dirtyVersion.current++;
           toast.info("已恢复该画布的未保存修改");
         }
-      } catch {
-        if (!cancelled) reportSave({ ok: false, message: "读取本地草稿失败，请检查本地存储" });
-      } finally {
         if (!cancelled) { draftReadyRef.current = true; setDraftReady(true); }
+      } catch (error) {
+        if (!cancelled) reportSave({ ok: false, message: `本地恢复失败，已暂停编辑：${error instanceof Error ? error.message : "请刷新重试"}` });
       }
     };
     void restore();
     return () => { cancelled = true; draftReadyRef.current = false; };
-  }, [doc.id, setNodes, setEdges, setViewport]);
+  }, [doc.id, changes, geometry, setNodesFromSync, setEdgesFromSync, setViewport]);
 
   // Pull remote changes without remounting the canvas or interrupting a gesture.
   useEffect(() => {
@@ -602,13 +670,23 @@ export function FlowCanvas({
   useEffect(() => {
     mounted.current = true;
     const warn = (event: BeforeUnloadEvent) => {
-      if (pendingUploads.current.size || dirtyVersion.current !== savedVersion.current) { event.preventDefault(); event.returnValue = ""; }
+      if (pendingUploads.current.size || changes.dirty() || dirtyVersion.current !== savedVersion.current) { event.preventDefault(); event.returnValue = ""; }
     };
-    const resetGesture = () => setDragging(false);
+    const resetGesture = () => {
+      setDragging(false);
+      if (!changes.active()) return;
+      finishGeometry();
+      changes.reset();
+      setNodesFromSync(current => current.map(node => node.dragging || node.resizing ? { ...node, dragging: false, resizing: false } : node));
+    };
+    const onVisibility = () => { if (document.hidden) resetGesture(); };
+    document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("blur", resetGesture);
     window.addEventListener("beforeunload", warn);
     return () => {
       window.removeEventListener("blur", resetGesture);
+      document.removeEventListener("visibilitychange", onVisibility);
+      clearDraftTimer();
       mounted.current = false;
       window.removeEventListener("beforeunload", warn);
       if (saveTimerRef.current) {
@@ -616,7 +694,7 @@ export function FlowCanvas({
         saveTimerRef.current = null;
       }
     };
-  }, []);
+  }, [changes, clearDraftTimer, finishGeometry, setNodesFromSync]);
 
   const registerAssets = useCallback((items: CanvasLibraryAsset[]) => {
     const next = mergeLibraryAssets(libraryRef.current, items);
@@ -743,16 +821,15 @@ export function FlowCanvas({
   }, [doc.name, scheduleSave]);
 
   useEffect(() => {
-    if (skipInitialSaveRef.current) {
-      skipInitialSaveRef.current = false;
-      return;
-    }
-    registerAssets(collectCanvasAssets(nodes, doc.createdAt, libraryRef.current));
+    const change = changes.take();
+    if (!change) return;
+    if (change.assets) registerAssets(collectCanvasAssets(nodes, doc.createdAt, libraryRef.current));
     scheduleSave();
-  }, [nodes, edges, scheduleSave, registerAssets, doc.createdAt]);
+  }, [nodes, edges, dragging, draftReady, changes, scheduleSave, registerAssets, doc.createdAt]);
 
   const onMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
+      changes.end("viewport");
       setDragging(false);
       if (viewport.x === viewportRef.current.x && viewport.y === viewportRef.current.y && viewport.zoom === viewportRef.current.zoom) return;
       viewportRef.current = viewport;
@@ -760,7 +837,7 @@ export function FlowCanvas({
       viewportVersionRef.current++;
       scheduleSave();
     },
-    [scheduleSave],
+    [scheduleSave, changes],
   );
 
   // ---- 附件计数：连线附件 + 直传附件共用 5 个名额 ----
@@ -1634,33 +1711,24 @@ export function FlowCanvas({
 
   // ---- 移动（拖动结束记一次撤销）----
   const onNodeDragStart = useCallback((_event: unknown, _node: Node, draggedNodes: Node[]) => {
+    changes.begin("node");
+    clearDraftTimer();
     setDragging(true);
     // 拖任何节点收起候选扇形
     closeCandidates(false);
-    dragStartRef.current = draggedNodes.map((node) => ({
-      id: node.id,
-      x: node.position.x,
-      y: node.position.y,
-    }));
-  }, [closeCandidates]);
+    geometry.begin(draggedNodes);
+  }, [closeCandidates, changes, geometry, clearDraftTimer]);
 
-  const onNodeDragStop = useCallback(() => {
+  const onNodeDrag = useCallback((_event: unknown, _node: Node, draggedNodes: Node[]) => {
+    geometry.update(draggedNodes);
+    persistGeometry(geometry.sample());
+  }, [geometry, persistGeometry]);
+
+  const onNodeDragStop = useCallback((_event: unknown, _node: Node, draggedNodes: Node[]) => {
+    finishGeometry(draggedNodes);
+    changes.end("node");
     setDragging(false);
-    const items = dragStartRef.current
-      .map((start) => {
-        const node = latestRef.current.nodes.find((item) => item.id === start.id);
-        if (!node || (node.position.x === start.x && node.position.y === start.y)) {
-          return null;
-        }
-        return { id: start.id, from: { x: start.x, y: start.y }, to: { x: node.position.x, y: node.position.y } };
-      })
-      .filter((item): item is { id: string; from: { x: number; y: number }; to: { x: number; y: number } } => item !== null);
-    if (items.length > 0) {
-      pushUndo({ type: "move", items });
-      redoStackRef.current = [];
-    }
-    dragStartRef.current = [];
-  }, [pushUndo]);
+  }, [finishGeometry, changes]);
 
   // ---- 设为主图（可撤销）：assetName 始终跟随主图槽 ----
   const setPrimaryResult = useCallback(
@@ -1813,13 +1881,14 @@ export function FlowCanvas({
           {...interactionConfig(mode)}
           colorMode={resolvedTheme === "light" ? "light" : "dark"}
           onConnectStart={() => setDragging(true)}
-          onMoveStart={() => setDragging(true)}
+          onMoveStart={() => { changes.begin("viewport"); clearDraftTimer(); setDragging(true); }}
           panActivationKeyCode="Space"
           panOnScroll
           zoomOnScroll={false}
           zoomActivationKeyCode={["Meta", "Control"]}
           deleteKeyCode={null}
           onNodeDragStart={onNodeDragStart}
+          onNodeDrag={onNodeDrag}
           onNodeDragStop={onNodeDragStop}
           onSelectionChange={onSelectionChange}
           onNodeClick={(_event, node) => {
@@ -1853,6 +1922,7 @@ export function FlowCanvas({
           }}
           proOptions={{ hideAttribution: true }}
         >
+          <CanvasZoomStyle />
           <Background variant={BackgroundVariant.Dots} gap={24} size={1} />
           <PromptPanel />
           <CandidatePanel />
