@@ -1,0 +1,42 @@
+{
+  "taskId": "P2-01",
+  "sourceCommit": "6551a0b98853684fbd1f090d3c363c0088820853",
+  "status": "passed",
+  "baseCommit": "b2d2c27a",
+  "red": {
+    "command": "node --test tests/command-schema.test.mjs",
+    "exitCode": 1,
+    "assertion": "先写测试，第一次运行因模块不存在而加载失败（ENOENT lib/canvas-runtime/command-schema.ts，这不算功能红灯）。随后放入只导出桩函数的模块，确认测试可加载，再次运行：17 项中 16 项失败，主要断言为 AssertionError: Missing expected exception（空 move、NaN 几何、schemaVersion=2、__proto__、status patch 等都未被拒绝）。唯一通过的一项是 legacy 字段接受，因为桩不会抛错。"
+  },
+  "checks": [
+    {"command": "node --test tests/command-schema.test.mjs", "exitCode": 0, "evidence": "本地 19/19 通过（Windows, Node 24.20.0）"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "本地 tsc --noEmit 无错误；PR CI 三矩阵复跑"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "本地 9 个套件共 274 项全过（ui 9、generation 39、auth 12、video 44、security 3、workspace 127、agent 10、commands 19、planning 11）；既有套件数量与 P2-01 之前一致，未删改既有断言"},
+    {"command": "node --test tests/workstation-plan.test.mjs", "exitCode": 0, "evidence": "本地 11/11"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖，推荐执行顺序无冲突"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "暂存区无空白错误"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "本地隔离目录生产构建成功；Next 追加到 tsconfig.json 的 include 已还原，未提交"},
+    {"command": "只读聚合扫描本机画布（6 画布/23 节点/21 连线，只统计字段名与问题计数，不输出内容）", "exitCode": 0, "evidence": "初次扫描发现 canvasText/asset 节点带 status（粘贴副本写入，flow-canvas 粘贴逻辑），已补为 legacy 字段并加测试；剩余问题只有 workflow 类型与 studioProjectId 字段，二者都由 cleanCanvas 在加载时移除"}
+  ],
+  "whitelist": {
+    "common": {"user": ["name", "pinned"]},
+    "image": {"user": ["prompt", "draftPrompt", "aspectRatio", "resolution", "quality", "generationCount", "uploadAttachments", "attachmentNames"], "service": ["assetName", "status", "results", "primaryResultId", "generationId", "appliedGenerationId", "errorMessage", "retryingSlotId", "generationRequest", "sourceNodeId"], "legacy": ["duration", "audio", "uploadInputs"]},
+    "video": {"user": ["prompt", "draftPrompt", "duration", "aspectRatio", "resolution", "audio", "uploadInputs", "attachmentNames"], "service": ["assetName", "status", "taskId", "waitedSeconds", "errorMessage", "errorKind", "generationRequest", "generationId", "sourceNodeId"], "legacy": ["quality", "generationCount", "uploadAttachments"]},
+    "asset": {"service": ["assetName"], "legacy": ["status", "generationId", "appliedGenerationId", "errorMessage"]},
+    "canvasText": {"user(document)": ["content"], "legacy": ["status", "generationId", "appliedGenerationId", "errorMessage"]}
+  },
+  "compatibility": [
+    "旧 React Flow 顶层 draggable:false（固定节点）没有登记过，现映射为公共用户字段 data.pinned，已写入 contracts C1",
+    "Agent addNodes 写入的跨类型默认值，以及粘贴副本写入的生成状态字段，登记为 legacy：新增/导入接受，不可 patch",
+    "图片 aspectRatio 按格式校验（auto 或 W:H），以兼容 UI 精简前留下的旧比例值；视频比例、时长、分辨率按现有枚举校验",
+    "文本几何：命令层只限制宽高不超过 3000（用户 NodeResizer 上限）；Agent 的 560×1120 夹取由 clampAgentTextSize 复刻，测试同时核对 lib/agent/canvas.ts 与 text-node.tsx 中的常量",
+    "正文/prompt 超限返回 413，其余校验错误返回 400 invalid_command；edit_edges 增删上限（1000/10000）与 apply_generation 补丁字段上限 64 是契约未写明处的选定值"
+  ],
+  "manual": {"status": "not-required", "evidence": "manifest P2-01 manual=false；纯类型与校验模块，未接入 UI/路由"},
+  "act": "红灯后最小实现，一次通过专测与全量回归。对本机数据做只读聚合扫描后补了 legacy 字段（文本/素材上的粘贴生成状态字段）并加测试，再复验通过。交接给 P2-02/P2-03：类型在 lib/canvas-runtime/types.ts（含 LegacyFlowNode/ConvertLegacyCanvas）；注册表在 lib/canvas-runtime/node-registry.ts（getNodeType/checkNodeData/checkNodePatch/checkNodeGeometry/clampAgentTextSize/defaultSize）；命令在 lib/canvas-runtime/command-schema.ts（parseCommand/canonicalCommand/assertClientCommand/LIMITS/CommandValidationError）。P2-02 的转换须在 cleanCanvas 之后进行；媒体节点没有 width/height 时用 measured，再回退到 280×240。命令 hash 与请求字节流式计数留给 P2-03 服务端 adapter。",
+  "risks": [
+    "当前运行时仍走旧 CanvasOperation/diff，新 schema 尚未接入任何入口（P2-03 起接入）",
+    "本机只有 6 个画布作为兼容样本，覆盖不了所有历史形态；P3-06 导入需要用完整校验报告兜底"
+  ],
+  "next": "P2-02"
+}
