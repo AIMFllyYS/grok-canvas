@@ -1,0 +1,41 @@
+{
+  "taskId": "P2-05",
+  "sourceCommit": "fddc04ac43346a4d880ad33ffcf2cbcbca5b492d",
+  "status": "passed",
+  "baseCommit": "0d0cce4f",
+  "red": {
+    "command": "node --test tests/canvas-outbox.test.mjs",
+    "exitCode": 1,
+    "assertion": "放入桩模块（outbox/recovery 抛“未实现”）后 12 项全部失败：11 项 Error: 未实现，1 项 test:commands 未登记 canvas-outbox 测试（regex 不匹配）。"
+  },
+  "checks": [
+    {"command": "node --test tests/canvas-outbox.test.mjs tests/canvas-performance.test.mjs", "exitCode": 0, "evidence": "本地 41/41（outbox 12 项 + 性能套件 29 项；其中原有的 IndexedDB 草稿/检查点事务测试在切换到共享 v2 打开器后仍通过）"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "本地无错误；PR CI 三矩阵复跑"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "本地 9 个套件共 331 项（commands 76 = 19 + 16 + 17 + 12 + 12）"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "canvas-drafts 被 flow-canvas 引用，生产构建通过；tsconfig 副作用已还原"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "behaviour": {
+    "sequence": "5 个并发 enqueue 分配到 1..5，不重复；同一会话重新打开后从 6 继续；序号按画布独立；本地库被清空而会话仍带旧 actorId 时，换发新 actorId，序号从 1 开始（不会出现同一 actorId 序号回到 1）",
+    "merge": "queued move 0→10、10→20 合并为一条 0→20，保留最早的 expectedVersion 与 commandId；patch prompt a→b 合并为 b，保留最早的 expectedVersion=3",
+    "sentImmutable": "markSent 之后再改同一字段会产生新序号，sent 记录的命令与 ID 不变（与标记前的深拷贝完全相同）",
+    "ack": "ack 与写水位、清理检查点在同一事务中完成：只删除该 commandId；seq2 与画布 B 的记录保留；检查点只清 ≤10 的部分，11 保留；commandId 不符时整体回滚，记录和检查点都不变",
+    "abort": "克隆失败（payload 含函数）使事务 abort：outbox 和检查点不变，序号不被消耗",
+    "backpressure": "达到 items 上限后，新命令以 queue_full 被明确拒绝，已接受的 3 条保留；字节上限同样生效",
+    "upgrade": "v1 库（只有 drafts）升级到 v2 后，drafts 数据仍可通过 listLegacyDrafts 读取，并新建 outbox/checkpoints/client_state；升级钩子抛错时整个升级回滚，库仍为 v1，只含 drafts",
+    "sender": "两次并发 flush 共用同一在途请求（最大并发 1）；网络错误返回 retry 且 saved=false，记录保持 sent，下一次只重发原 envelope（同一 commandId，内容相同）；ack 后返回 saved=true；确定性冲突时 markConflict 并暂停，后续 queued 不再发送；stale_epoch 返回 recovery_required，不重发",
+    "legacyRecovery": "服务端等于 working 的字段跳过；等于 base 的字段生成带服务端当前版本的命令（prompt expectedVersion=7）；本地删除的节点生成 delete_nodes(expectedEntityVersion=2)；本地新增的文本节点生成 add_nodes 并带上正文；服务端同字段被他人改动时 status=conflict、editingPaused=true，不生成任何命令；inflight 快照已被服务端应用时，以快照为基准生成后续命令",
+    "atomicConversion": "转换命令、迁移标记和清除旧草稿（含其坐标检查点）在同一事务内完成：第二条命令无法克隆时整体回滚，outbox 为空、旧草稿保留；成功后再执行返回 already，不产生重复命令",
+    "bundle": "exportRecoveryBundle 只导出该画布的 drafts/outbox/checkpoints/client_state，过滤认证相关键，导出后状态不变（记录仍为 queued）"
+  },
+  "stateDiagram": "queued --markSent--> sent --ack--> (删除)；sent --确定性冲突--> conflict（暂停后续发送，等待 UI 处理）；sent --网络不明/423/429/5xx--> sent（重发原 envelope）；sent --stale_epoch--> recovery_required（先恢复协调）。v1 草稿：listLegacyDrafts → recoverLegacy → ready（commitLegacyRecovery 同事务入队+标记+清草稿）| conflict（editingPaused，保留草稿，可导出恢复包）| empty",
+  "manual": {"status": "not-required", "evidence": "manifest P2-05 manual=false；UI 恢复入口与“已保存”状态接线留给 P2-06"},
+  "act": "红灯后一次实现，专测与全量回归首轮通过，无需修正。交接给 P2-06：FlowCanvas 以 openOutbox 代替 saveCanvasDraft，用户命令走 enqueue+createCommandSender；只有 sender 返回 saved=true 才显示已保存；启动时先 listLegacyDrafts → recoverLegacy（服务端读取器用实体快照）→ commitLegacyRecovery，冲突时保持编辑暂停并提供 exportRecoveryBundle 下载；坐标检查点改存 outbox.saveCheckpoint，ack 时传 checkpointThrough。禁止删除 IndexedDB 来规避恢复失败。",
+  "risks": [
+    "当前 UI 仍写 v1 drafts store（P2-06 切换前保持旧行为）；v2 升级时如果还有旧版本页面打开，会因 blocked 而提示关闭其他标签页",
+    "fake-indexeddb 无法模拟真实配额不足；配额失败在实现上与克隆失败走同一条 abort 路径，实机验证留给 P6",
+    "本地被删除的字段（值变为 undefined）无法用 patch 表达，recoverLegacy 将其列入 skipped 而不报错"
+  ],
+  "next": "P3-01"
+}
