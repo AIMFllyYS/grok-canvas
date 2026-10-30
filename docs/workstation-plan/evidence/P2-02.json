@@ -1,0 +1,39 @@
+{
+  "taskId": "P2-02",
+  "sourceCommit": "985a31974a313feaadced23d82bba80060ac50c1",
+  "status": "passed",
+  "baseCommit": "85661e97",
+  "red": {
+    "command": "node --test tests/canvas-entity-store.test.mjs",
+    "exitCode": 1,
+    "assertion": "放入桩模块（store/legacy-document 抛“未实现”，indexes.ts 尚不存在）后，16 项全部失败：14 项是 Error: 未实现，1 项是 legacy 转换需要的 indexes.ts 不存在，1 项是 test:commands 未登记新测试（regex 不匹配）。"
+  },
+  "checks": [
+    {"command": "node --test tests/canvas-entity-store.test.mjs tests/canvas-performance.test.mjs", "exitCode": 0, "evidence": "本地 45/45（实体 Store 16 项 + 既有性能套件 29 项），万级测试 121ms"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "本地无错误；PR CI 三矩阵复跑"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "本地 9 个套件共 290 项全过（commands 套件 35 = 19 + 16）"},
+    {"command": "node --test tests/workstation-plan.test.mjs", "exitCode": 0, "evidence": "11/11"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "complexity": {
+    "fixture": "canvasFixture(10000)：10000 节点 / 20000 边",
+    "init": "nodeVisits=10000，edgeVisits=20000（各一次）",
+    "singleMove": {"nodeVisits": 1, "edgeVisits": 0, "assetVisits": 0, "listRebuilds": 0, "spatialUpserts": 1},
+    "singleDelete": "只访问该节点的 4 条入边（edgeVisits 8 ≤ 40），listRebuilds 2（节点与连线 ID 列表各一次）",
+    "note": "计数只证明没有遍历全图，不是帧率证明"
+  },
+  "api": {
+    "store": "createCanvasStore(seed) → getNode/getDocument/getEdge/getNodeIds/getEdgeIds/getRevision/getCanvas/getIncoming/getOutgoing/getNodesUsingAsset/queryRect/subscribeNode/subscribeDocument/subscribeEdge/subscribeStructure/subscribeCanvas/applyDelta/snapshot/stats/resetStats/dispose",
+    "applyDelta": "影子校验画布归属、fromRevision、版本不回退、端点存在、文档归属；通过后一次发布再通知；返回 changed/removed 各 ID 与 dependentNodeIds（主图 assetName 变化时的 outgoing 目标）；订阅回调异常不阻断其他回调，结束后抛出第一个",
+    "legacy": "fromCanvasDoc(doc, {documentIds}) → {seed, meta, issues, documentIds}；toCanvasDoc(snapshot, meta) 仅用于兼容导出；deriveDocumentId(nodeId) = doc_<nodeId>，超长时加 FNV 后缀"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P2-02 manual=false；纯逻辑模块，未接 React 组件"},
+  "act": "红灯后一次实现，首轮绿灯检查有 2 项失败：测试 helper 写死了 canvasId c1，没有使用 fixture 的画布 ID；源码扫描把注释里的“JSON.stringify”当成调用。前者改为使用 store.canvasId；后者扫描前去掉注释，规则本身不放宽。修正后重跑全绿。交接给 P2-03：执行器以 Store/Delta 为结果载体，legacy-document 负责 JSON 兼容 Repository 的整文件读写转换；document ID 映射要随画布持久化（P2-03 的 Repository 或 P3 表结构负责保存）。",
+  "risks": [
+    "data 引用复用只做顶层逐键比较：来自网络的 JSON 增量即使仅改几何，嵌套数组也是新引用，会替换 data 并通知该节点（只影响该节点，不影响其他订阅）",
+    "unknown 类型节点会保留在 Store 中并写入 issues；是否阻断导入由 P3-06 决定",
+    "draggable:true 显式值视为默认值，导出时不保留"
+  ],
+  "next": "P2-03"
+}
