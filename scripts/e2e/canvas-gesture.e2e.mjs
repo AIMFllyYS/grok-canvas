@@ -379,6 +379,29 @@ async function drag(id, dx, dy, { steps = 120, from = "content", during } = {}) 
   check("operations 只剩兼容字段（无正文/提示词/名称/几何）", leaking.length === 0, JSON.stringify(leaking.slice(0, 2)));
 }
 
+// 14) P2-09 只读预显示层：注入一条预览，不拦截指针、不改正式节点数；交接正式 ID 后正式节点出现即移除
+{
+  const formalBefore = await page.locator(".react-flow__node").count();
+  await page.evaluate(id => {
+    const store = globalThis.__grokCanvasPreviewStore;
+    store.upsert({ canvasId: id, toolCallId: "e2e-call", itemIndex: 0, kind: "add", nodeType: "image", label: "预览图片", x: 2000, y: 2000, width: 304, height: 264, status: "pending" });
+  }, canvasId);
+  await sleep(300);
+  const preview = page.locator('[data-preview="add"]');
+  const shown = await preview.count();
+  const pointer = shown ? await preview.first().evaluate(el => getComputedStyle(el).pointerEvents) : "";
+  check("预显示层渲染且 pointer-events:none", shown === 1 && pointer === "none", JSON.stringify({ shown, pointer }));
+  check("预显示不改变正式节点数", (await page.locator(".react-flow__node").count()) === formalBefore);
+  const existing = (await api("GET", `/api/canvases/${canvasId}?background=1`)).body.nodes[0].id;
+  await page.evaluate(([id, nodeId]) => {
+    const store = globalThis.__grokCanvasPreviewStore;
+    const [entry] = store.get(id);
+    store.upsert({ ...entry, nodeId });
+  }, [canvasId, existing]);
+  await sleep(500);
+  check("正式节点存在时预显示自动移除", (await preview.count()) === 0);
+}
+
 check("无页面错误", consoleErrors.length === 0, consoleErrors.slice(0, 5).join(" | "));
 check("唯一的非 2xx 响应是冲突场景里 /commands 的 409", badResponses.length >= 1 && badResponses.every(r => r.status === 409 && r.url.endsWith("/commands")), JSON.stringify(badResponses));
 check("全程旧 operations 未发送几何", geometryOps().length === 0, JSON.stringify(geometryOps().slice(0, 3)));
