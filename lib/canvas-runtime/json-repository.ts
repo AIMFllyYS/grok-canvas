@@ -8,7 +8,7 @@ import { commitCommandWrite, loadCanvas, type CanvasDoc } from "../canvas-store"
 import { emptyCommandState, own, setOwn, deleteOwn, type CanvasCommandState, type NodeVersions, type StoredCommandResult } from "./command-state";
 import { convertLegacyNode, deriveDocumentId, exportLegacyNode, fromCanvasDoc } from "./legacy-document";
 import { isEmptyWriteSet, type EntityReader, type WriteSet } from "./command-reducer";
-import type { CommandErrorCode, CommitReceipt, Delta, DocumentRecord, EdgeRecord, EdgeRole, NodeSummary } from "./types";
+import type { CommandErrorCode, CommandErrorField, CommitReceipt, Delta, DocumentRecord, EdgeRecord, EdgeRole, NodeSummary } from "./types";
 
 export type CommandRecordMeta = { commandId: string; actorId: string; actorSeq: number; hash: string };
 
@@ -22,7 +22,7 @@ export interface CommandTxn {
   /** 提交写集（空写集即空变更）并记录回执；返回与落盘一致的回执。 */
   commit(writes: WriteSet, meta: CommandRecordMeta): CommitReceipt;
   /** 记录确定性拒绝：占用 actorSeq，同一命令重试得到同样的错误。 */
-  reject(meta: CommandRecordMeta, error: { code: CommandErrorCode; message: string }): void;
+  reject(meta: CommandRecordMeta, error: { code: CommandErrorCode; message: string; fields?: CommandErrorField[] }): void;
 }
 
 export interface CommandRepository {
@@ -260,6 +260,8 @@ export type EntitySnapshot = {
   documents: DocumentRecord[];
   edges: EdgeRecord[];
   actors: Record<string, { acceptedSeq: number }>;
+  /** nodeId → field → 版本（name/prompt/pinned 等非几何、非正文字段）。 */
+  fieldVersions: Record<string, Record<string, number>>;
 };
 
 /** 带版本的实体快照：供客户端初始化与测试取得 expectedVersion。整图转换，仅用于加载。 */
@@ -282,5 +284,9 @@ export async function loadEntitySnapshot(canvasId: string): Promise<EntitySnapsh
     documents: converted.seed.documents.map(record => ({ ...record, version: own(versionsOf(state, record.nodeId).fields ?? {}, "content") ?? 0 })),
     edges: converted.seed.edges.map(edge => ({ ...edge, version: own(state.edges, edge.id) ?? 0 })),
     actors: { ...state.actors },
+    fieldVersions: Object.fromEntries(Object.entries(state.nodes).filter(([, versions]) => versions.fields).map(([nodeId, versions]) => {
+      const { content: _content, ...fields } = versions.fields!;
+      return [nodeId, fields];
+    })),
   };
 }

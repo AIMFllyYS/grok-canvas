@@ -6,7 +6,7 @@
  */
 import { diffCanvasOperations } from "../canvas-operations";
 import type { CanvasDoc } from "../canvas-store";
-import type { AssetRegistration, CommandErrorCode, CommitReceipt } from "./types";
+import type { AssetRegistration, CommandErrorCode, CommandErrorField, CommitReceipt } from "./types";
 
 export const JSON_STORAGE_EPOCH = "json-v1";
 
@@ -16,7 +16,7 @@ export type StoredCommandResult = {
   actorId: string;
   actorSeq: number;
   receipt?: CommitReceipt;
-  error?: { code: CommandErrorCode; message: string };
+  error?: { code: CommandErrorCode; message: string; fields?: CommandErrorField[] };
 };
 export type CanvasCommandState = {
   v: 1;

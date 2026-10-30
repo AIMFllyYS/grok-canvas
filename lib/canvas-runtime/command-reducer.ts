@@ -1,6 +1,7 @@
 /**
  * 领域命令 reducer（contracts.md C2）：输入实体读取接口与已解析命令，输出写集。
  * - 只读取目标实体、相关边与受影响的引用下游，不加载或遍历全图；
+ * - 同一子命令内的版本冲突全部收集后一次报告（fields 列出确切实体与字段），不做部分成功；
  * - batch 在影子状态上顺序执行，任一子命令失败则整条命令无写集（原子）；
  * - 不分配 revision/eventSeq，不写回执：由仓库在同一事务内完成。
  */
@@ -8,7 +9,7 @@ import { resolveCanvasReferences, type ReferenceEdge, type ReferenceNode } from 
 import { canonicalJson } from "./command-schema";
 import { checkNodeGeometry, checkNodePatch, formatIssue } from "./node-registry";
 import type {
-  AssetRegistration, BatchItem, CanvasCommand, DocumentRecord, EdgeRecord, FieldRef, Geometry, NodeSummary,
+  AssetRegistration, BatchItem, CanvasCommand, CommandErrorField, DocumentRecord, EdgeRecord, FieldRef, Geometry, NodeSummary,
 } from "./types";
 
 export interface EntityReader {
@@ -51,14 +52,18 @@ export type ReducerContext = {
 
 export class ReducerError extends Error {
   readonly code: "field_conflict" | "invalid_command";
-  constructor(code: "field_conflict" | "invalid_command", message: string) {
+  readonly fields: CommandErrorField[];
+  constructor(code: "field_conflict" | "invalid_command", message: string, fields: CommandErrorField[] = []) {
     super(message);
     this.name = "ReducerError";
     this.code = code;
+    this.fields = fields;
   }
 }
 
-const conflict = (message: string): never => { throw new ReducerError("field_conflict", message); };
+/** 冲突字段路径：target/id/field，例如 node/n1/geometry、document/doc_t1/content、canvas/c1/name。 */
+export const fieldPath = (ref: FieldRef) => `${ref.target}/${ref.id}/${ref.field}`;
+
 const invalid = (message: string): never => { throw new ReducerError("invalid_command", message); };
 const sameGeometry = (a: Geometry, b: Geometry) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 const sameValue = (a: unknown, b: unknown) => Object.is(a, b) || (typeof a === "object" && typeof b === "object" && a !== null && b !== null && canonicalJson(a) === canonicalJson(b));
@@ -98,7 +103,7 @@ function shadow(base: EntityReader, w: WriteSet): EntityReader {
 }
 
 function recordField(w: WriteSet, ref: FieldRef, version: number) {
-  w.fieldVersions.set(`${ref.target}/${ref.id}/${ref.field}`, { ...ref, version });
+  w.fieldVersions.set(fieldPath(ref), { ...ref, version });
 }
 
 function bumpNodeField(s: EntityReader, w: WriteSet, nodeId: string, field: string): number {
@@ -108,12 +113,6 @@ function bumpNodeField(s: EntityReader, w: WriteSet, nodeId: string, field: stri
   fields.set(field, version);
   recordField(w, { target: "node", id: nodeId, field }, version);
   return version;
-}
-
-function requireNode(s: EntityReader, nodeId: string): NodeSummary {
-  const node = s.getNode(nodeId);
-  if (!node) return conflict(s.isNodeTombstoned(nodeId) ? `节点 ${nodeId} 已删除` : `节点 ${nodeId} 不存在`);
-  return node;
 }
 
 /** 只对受影响的图片/视频节点按现有规则解析引用：入边来源与本节点参考字段。 */
@@ -139,47 +138,57 @@ function validateReferences(s: EntityReader, nodeIds: Iterable<string>) {
 }
 
 function reduceItem(base: EntityReader, w: WriteSet, item: BatchItem, context: ReducerContext) {
-  const s = shadow(base, w);
+  const view = () => shadow(base, w);
+  const conflicts: CommandErrorField[] = [];
+  const conflict = (ref: FieldRef, message: string) => { conflicts.push({ path: fieldPath(ref), message }); };
+  const nodeOrConflict = (nodeId: string, field: string): NodeSummary | undefined => {
+    const node = view().getNode(nodeId);
+    if (!node) conflict({ target: "node", id: nodeId, field }, view().isNodeTombstoned(nodeId) ? `节点 ${nodeId} 已删除` : `节点 ${nodeId} 不存在`);
+    return node;
+  };
   const referenceTargets = new Set<string>();
   switch (item.kind) {
     case "move_nodes": {
       for (const move of item.payload.items) {
-        const node = requireNode(s, move.nodeId);
-        if (node.geometryVersion !== move.expectedVersion) conflict(`节点 ${node.id} 的位置已被修改（版本 ${node.geometryVersion}）`);
-        if (!sameGeometry(node.geometry, move.from)) conflict(`节点 ${node.id} 的起始位置与当前不一致`);
+        const node = nodeOrConflict(move.nodeId, "geometry");
+        if (!node) continue;
+        const ref = { target: "node" as const, id: node.id, field: "geometry" };
+        if (node.geometryVersion !== move.expectedVersion) { conflict(ref, `节点 ${node.id} 的位置已被修改（版本 ${node.geometryVersion}）`); continue; }
+        if (!sameGeometry(node.geometry, move.from)) { conflict(ref, `节点 ${node.id} 的起始位置与当前不一致`); continue; }
         if (sameGeometry(node.geometry, move.to)) continue;
         const issues = checkNodeGeometry(node.type, move.to);
         if (issues.length) invalid(issues.map(formatIssue).join("；"));
         const geometryVersion = node.geometryVersion + 1;
         w.nodes.set(node.id, { ...node, geometry: { ...move.to }, geometryVersion, entityVersion: node.entityVersion + 1 });
-        recordField(w, { target: "node", id: node.id, field: "geometry" }, geometryVersion);
+        recordField(w, ref, geometryVersion);
       }
       break;
     }
     case "patch_nodes": {
       for (const patch of item.payload.items) {
-        const node = requireNode(shadow(base, w), patch.nodeId);
+        const node = nodeOrConflict(patch.nodeId, patch.field);
+        if (!node) continue;
         const issues = checkNodePatch(node.type, { [patch.field]: patch.value }, "user");
         if (issues.length) invalid(issues.map(formatIssue).join("；"));
         if (patch.field === "content") {
-          const doc = node.documentId ? shadow(base, w).getDocument(node.documentId) : undefined;
-          if (!doc) conflict(`节点 ${node.id} 没有正文文档`);
-          if (doc!.version !== patch.expectedVersion) conflict(`节点 ${node.id} 的正文已被修改（版本 ${doc!.version}）`);
-          if (doc!.content === patch.value) continue;
-          const version = doc!.version + 1;
-          w.documents.set(doc!.id, { ...doc!, content: patch.value as string, version });
-          recordField(w, { target: "document", id: doc!.id, field: "content" }, version);
+          const doc = node.documentId ? view().getDocument(node.documentId) : undefined;
+          if (!doc) { conflict({ target: "node", id: node.id, field: "content" }, `节点 ${node.id} 没有正文文档`); continue; }
+          if (doc.version !== patch.expectedVersion) { conflict({ target: "document", id: doc.id, field: "content" }, `节点 ${node.id} 的正文已被修改（版本 ${doc.version}）`); continue; }
+          if (doc.content === patch.value) continue;
+          const version = doc.version + 1;
+          w.documents.set(doc.id, { ...doc, content: patch.value as string, version });
+          recordField(w, { target: "document", id: doc.id, field: "content" }, version);
           w.nodes.set(node.id, { ...node, entityVersion: node.entityVersion + 1 });
           continue;
         }
-        const current = shadow(base, w).fieldVersion(node.id, patch.field);
-        if (current !== patch.expectedVersion) conflict(`节点 ${node.id} 的 ${patch.field} 已被修改（版本 ${current}）`);
+        const current = view().fieldVersion(node.id, patch.field);
+        if (current !== patch.expectedVersion) { conflict({ target: "node", id: node.id, field: patch.field }, `节点 ${node.id} 的 ${patch.field} 已被修改（版本 ${current}）`); continue; }
         const previous = patch.field === "pinned" ? node.data.pinned === true : node.data[patch.field];
         if (sameValue(previous, patch.value)) continue;
         const data: Record<string, unknown> = { ...node.data };
         if (patch.field === "pinned" && patch.value === false) delete data.pinned;
         else data[patch.field] = structuredClone(patch.value);
-        bumpNodeField(shadow(base, w), w, node.id, patch.field);
+        bumpNodeField(view(), w, node.id, patch.field);
         w.nodes.set(node.id, { ...node, data, entityVersion: node.entityVersion + 1 });
         if (REFERENCE_FIELDS.has(patch.field)) referenceTargets.add(node.id);
       }
@@ -188,9 +197,10 @@ function reduceItem(base: EntityReader, w: WriteSet, item: BatchItem, context: R
     case "add_nodes": {
       const documents = new Map(item.payload.documents.map(doc => [doc.id, doc]));
       for (const node of item.payload.nodes) {
-        if (s.getNode(node.id)) conflict(`节点 ${node.id} 已存在`);
-        if (s.isNodeTombstoned(node.id)) conflict(`节点 ${node.id} 已删除，不能用同一 ID 复活`);
-        if (node.documentId && s.getDocument(node.documentId)) conflict(`正文文档 ${node.documentId} 已存在`);
+        const ref = { target: "node" as const, id: node.id, field: "entity" };
+        if (view().getNode(node.id)) { conflict(ref, `节点 ${node.id} 已存在`); continue; }
+        if (view().isNodeTombstoned(node.id)) { conflict(ref, `节点 ${node.id} 已删除，不能用同一 ID 复活`); continue; }
+        if (node.documentId && view().getDocument(node.documentId)) { conflict({ target: "document", id: node.documentId, field: "entity" }, `正文文档 ${node.documentId} 已存在`); continue; }
         w.nodes.set(node.id, structuredClone(node));
         if (node.documentId) w.documents.set(node.documentId, { ...documents.get(node.documentId)! });
         referenceTargets.add(node.id);
@@ -199,9 +209,11 @@ function reduceItem(base: EntityReader, w: WriteSet, item: BatchItem, context: R
     }
     case "delete_nodes": {
       for (const removal of item.payload.items) {
-        const node = requireNode(shadow(base, w), removal.nodeId);
-        if (node.entityVersion !== removal.expectedEntityVersion) conflict(`节点 ${node.id} 已被修改（版本 ${node.entityVersion}）`);
-        const current = shadow(base, w);
+        const node = nodeOrConflict(removal.nodeId, "entity");
+        if (!node) continue;
+        if (node.entityVersion !== removal.expectedEntityVersion) { conflict({ target: "node", id: node.id, field: "entity" }, `节点 ${node.id} 已被修改（版本 ${node.entityVersion}）`); continue; }
+        if (conflicts.length) continue;
+        const current = view();
         for (const edgeId of [...current.incomingEdgeIds(node.id), ...current.outgoingEdgeIds(node.id)]) {
           w.edges.delete(edgeId);
           w.removedEdges.add(edgeId);
@@ -214,20 +226,22 @@ function reduceItem(base: EntityReader, w: WriteSet, item: BatchItem, context: R
     }
     case "edit_edges": {
       for (const removal of item.payload.remove) {
-        const edge = shadow(base, w).getEdge(removal.edgeId);
-        if (!edge) conflict(`连线 ${removal.edgeId} 不存在或已删除`);
-        if (edge!.version !== removal.expectedVersion) conflict(`连线 ${removal.edgeId} 已被修改（版本 ${edge!.version}）`);
+        const edge = view().getEdge(removal.edgeId);
+        const ref = { target: "edge" as const, id: removal.edgeId, field: "entity" };
+        if (!edge) { conflict(ref, `连线 ${removal.edgeId} 不存在或已删除`); continue; }
+        if (edge.version !== removal.expectedVersion) { conflict(ref, `连线 ${removal.edgeId} 已被修改（版本 ${edge.version}）`); continue; }
         w.edges.delete(removal.edgeId);
         w.removedEdges.add(removal.edgeId);
       }
       for (const edge of item.payload.add) {
-        const current = shadow(base, w);
-        if (current.getEdge(edge.id)) conflict(`连线 ${edge.id} 已存在`);
-        if (current.isEdgeTombstoned(edge.id)) conflict(`连线 ${edge.id} 已删除，不能用同一 ID 复活`);
+        const current = view();
+        const ref = { target: "edge" as const, id: edge.id, field: "entity" };
+        if (current.getEdge(edge.id)) { conflict(ref, `连线 ${edge.id} 已存在`); continue; }
+        if (current.isEdgeTombstoned(edge.id)) { conflict(ref, `连线 ${edge.id} 已删除，不能用同一 ID 复活`); continue; }
         const source = current.getNode(edge.source), target = current.getNode(edge.target);
-        if (!source || !target) conflict(`连线 ${edge.id} 的端点不存在或已删除`);
-        const textLink = source!.type === "canvasText" || target!.type === "canvasText";
-        if (!textLink && (!["image", "asset"].includes(source!.type) || !["image", "video"].includes(target!.type))) invalid("连线端点无效；图片可作为图片或视频参考");
+        if (!source || !target) { conflict({ target: "node", id: !source ? edge.source : edge.target, field: "entity" }, `连线 ${edge.id} 的端点不存在或已删除`); continue; }
+        const textLink = source.type === "canvasText" || target.type === "canvasText";
+        if (!textLink && (!["image", "asset"].includes(source.type) || !["image", "video"].includes(target.type))) invalid("连线端点无效；图片可作为图片或视频参考");
         w.edges.set(edge.id, { ...edge });
         referenceTargets.add(edge.target);
       }
@@ -246,8 +260,8 @@ function reduceItem(base: EntityReader, w: WriteSet, item: BatchItem, context: R
         const missing = context.assetExists ? !context.assetExists(asset.assetName) : asset.missing ?? false;
         w.assets.set(asset.assetName, { assetName: asset.assetName, kind: asset.kind, createdAt: asset.createdAt, missing });
       }
-      const node = s.getNode(nodeId);
-      const claim = s.generationClaim(nodeId);
+      const node = view().getNode(nodeId);
+      const claim = view().generationClaim(nodeId);
       // 过期结果：节点已删、已换新任务或 claim 不符时只登记素材（孤儿），不覆盖新任务。
       if (!node || node.data.generationId !== generationId || (claim && claim.id !== claimId)) break;
       const issues = checkNodePatch(node.type, patch, "service");
@@ -257,7 +271,7 @@ function reduceItem(base: EntityReader, w: WriteSet, item: BatchItem, context: R
       for (const [field, value] of Object.entries(patch)) {
         if (sameValue(data[field], value)) continue;
         data[field] = structuredClone(value);
-        bumpNodeField(shadow(base, w), w, nodeId, field);
+        bumpNodeField(view(), w, nodeId, field);
         if (REFERENCE_FIELDS.has(field)) referenceTargets.add(nodeId);
         changed = true;
       }
@@ -265,16 +279,19 @@ function reduceItem(base: EntityReader, w: WriteSet, item: BatchItem, context: R
       break;
     }
     case "rename_canvas": {
-      const version = s.nameVersion();
-      if (version !== item.payload.expectedVersion) conflict(`画布名称已被修改（版本 ${version}）`);
-      if (s.canvasName() === item.payload.name) break;
+      const version = view().nameVersion();
+      if (version !== item.payload.expectedVersion) { conflict({ target: "canvas", id: base.canvasId, field: "name" }, `画布名称已被修改（版本 ${version}）`); break; }
+      if (view().canvasName() === item.payload.name) break;
       w.name = item.payload.name;
       w.nameVersion = version + 1;
       recordField(w, { target: "canvas", id: base.canvasId, field: "name" }, version + 1);
       break;
     }
   }
-  validateReferences(shadow(base, w), referenceTargets);
+  if (conflicts.length) {
+    throw new ReducerError("field_conflict", conflicts.length === 1 ? conflicts[0]!.message : `${conflicts.length} 个字段已被修改：${conflicts.slice(0, 3).map(c => c.path).join("、")}${conflicts.length > 3 ? " 等" : ""}`, conflicts);
+  }
+  validateReferences(view(), referenceTargets);
 }
 
 /** 失败抛出 ReducerError；成功返回写集（可能为空，表示空变更）。 */
