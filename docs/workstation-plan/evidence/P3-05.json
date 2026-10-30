@@ -1,0 +1,32 @@
+{
+  "taskId": "P3-05",
+  "sourceCommit": "177fa4aea384707405ce174e73c5d62da6fcde30",
+  "status": "passed",
+  "baseCommit": "6c6531b3",
+  "red": {
+    "command": "node --test tests/db-commands.test.mjs",
+    "exitCode": 1,
+    "assertion": "command-repository.cjs / command-adapter.ts 为只抛“未实现”的桩、command-service 为 P3-04 版本（无 selectCommandStore/listCanvasChanges）、changes 路由不存在时 10/11 失败；唯一通过的是“命令路由未引用 SQL 且测试已登记”的静态检查。"
+  },
+  "checks": [
+    {"command": "node --test tests/db-commands.test.mjs", "exitCode": 0, "evidence": "11/11（真实临时 SQLite）：JSON 与 SQL 同一组 19 步领域命令逐步回执/错误码 deepEqual，最终实体快照一致（revision 11、事件 11 条、删除为墓碑、缺失素材 missing=1）；after_node/before_receipt/after_event 三个故障点重开 DB 后 revision 0、几何与正文不变、events/receipts/watermarks/node_fields 均为 0 行，随后同一命令成功；提交后换新连接重试 replayed 且事件仍 1 条；move 在 10 与 3000 节点画布上语句数相同、无 documents 读取、无 data_json 更新；120 条事件按 50 分 3 页无重复/跳过、错误纪元 409、limit 101/超前 revision 400、裁剪后 410 snapshot_required、1.5MiB 事件单独 oversized、>4MiB 410；SQLITE_BUSY 503 storage_unavailable 带 retryAfterMs，释放后同一命令成功；executeServerCommand 走所选仓库、取消选择后回到 JSON；changes 路由 C6 形状/400/404/410/409"},
+    {"command": "node --test tests/canvas-commands.test.mjs tests/generation-commands.test.mjs", "exitCode": 0, "evidence": "与 db-commands 同跑 38/38，JSON 路径未退化"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "10 个套件共 421 项"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "包含 ƒ /api/canvases/[id]/changes；tsconfig 副作用已还原"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "sqlAccess": {
+    "move_nodes": "测试断言（trace 回调记录每次语句执行）：单节点移动在 10 节点与 3000 节点画布上执行的语句数相同；没有任何语句 from/join documents；没有 UPDATE nodes 涉及 data_json；存在只更新 x/y/width/height/entity_version/geometry_version 的 UPDATE。未逐条记录语句清单。",
+    "faultPoints": ["after_node", "before_receipt", "after_event"],
+    "equivalence": "contractSteps 19 步：两 actor 异字段、同字段冲突、batch 原子失败、重试 replayed、command_id_reused、actor_sequence_gap、stale_epoch、删除级联、墓碑不可复活、引用边、改名、缺失素材、客户端 apply_generation 拒绝、过期/当前 generationId、新增文本节点"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P3-05 manual=false；只用临时 SQLite，生产命令路由仍默认 JSON"},
+  "act": "首轮等价测试唯一差异是 JSON 快照会保留只剩正文版本的空 fieldVersions 对象（t1:{}），语义相同，比较时去掉空项。生成网络下载仍在事务外完成；SQLite busy 时事务整体回滚，只返回可重试的保存错误，不会重新发起收费生成。生产 API 尚未切到 SQL（command 路由不引用 adapter），不把它描述为已在生产使用 SQL。",
+  "risks": [
+    "SQL 适配器目前直接用同步连接，Worker 侧接线（commands.execute op）与主库切换在 P3-08。",
+    "事件保留与按 ack 压缩（C6）未实现，裁剪场景只用测试中的手动 DELETE 模拟；在 P3-09/P3-10 处理。"
+  ],
+  "next": "P3-07"
+}
