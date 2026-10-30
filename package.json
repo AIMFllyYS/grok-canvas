@@ -38,7 +38,7 @@
     "test:security": "node --experimental-strip-types --test tests/local-access.test.mjs",
     "test:workspace": "node --test tests/workspace-preferences.test.mjs tests/account-display.test.mjs tests/canvas-interaction.test.mjs tests/canvas-performance.test.mjs tests/usage.test.mjs tests/canvas-library.test.mjs tests/canvas-references.test.mjs tests/canvas-store.test.mjs tests/canvas-operations.test.mjs tests/canvas-route.test.mjs tests/canvas-persistence.test.mjs tests/asset-upload.test.mjs tests/prompt-editor.test.mjs tests/asset-drag.test.mjs tests/desktop-runtime.test.mjs tests/desktop-bridge.test.mjs",
     "test:agent": "node --test tests/agent.test.mjs tests/agent-sdk.test.mjs",
-    "test:commands": "node --test tests/command-schema.test.mjs tests/canvas-entity-store.test.mjs tests/canvas-commands.test.mjs tests/canvas-history-leases.test.mjs tests/canvas-outbox.test.mjs tests/canvas-scene.test.mjs",
+    "test:commands": "node --test tests/command-schema.test.mjs tests/canvas-entity-store.test.mjs tests/canvas-commands.test.mjs tests/canvas-history-leases.test.mjs tests/canvas-outbox.test.mjs tests/canvas-scene.test.mjs tests/canvas-user-actions.test.mjs",
     "test:planning": "node --test tests/workstation-plan.test.mjs",
     "test:db": "node --test tests/db-worker.test.mjs tests/db-packaging.test.mjs",
     "db:smoke": "node scripts/db-runtime-smoke.mjs",

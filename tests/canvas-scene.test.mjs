@@ -459,10 +459,11 @@ test("FlowCanvas 接线：ReactFlow 只在 CanvasScene 中渲染并订阅手势�
   assert.doesNotMatch(flow, /<ReactFlow\b/, "FlowCanvas 不再直接渲染 ReactFlow");
   assert.match(flow, /<CanvasScene\b/);
   assert.doesNotMatch(flow, /useSyncExternalStore\(gesture/, "FlowCanvas 本身不随手势重渲染");
-  assert.match(flow, /const legacyAdapter = [\s\S]{0,600}?withoutCommandGeometry\(diffCanvasOperations\(/, "临时 legacy adapter 是旧保存差异的唯一入口，并剥离命令几何");
-  assert.equal((flow.match(/const legacyAdapter = /g) ?? []).length, 1);
-  assert.ok((flow.match(/legacyAdapter\.operations\(/g) ?? []).length >= 2, "批次与待提交差异都经过 legacy adapter");
-  assert.equal((flow.match(/diffCanvasOperations\(/g) ?? []).length, 2, "除 adapter 外只有远端时钟标记直接读取原始差异");
+  // P2-07 起：临时 legacyAdapter 删除，普通保存不再做整图差异；只剩显式命名的 service 字段兼容写入。
+  assert.doesNotMatch(flow, /legacyAdapter/, "P2-06 临时 legacy adapter 已删除");
+  assert.doesNotMatch(flow, /diffCanvasOperations\(/, "普通保存不再整图 diff");
+  assert.match(flow, /translateUserWrites\(/, "用户写入翻译成命令");
+  assert.equal((flow.match(/const legacyServiceWrites = /g) ?? []).length, 1, "兼容写入只有一个命名入口");
   assert.match(flow, /keepLocalGeometry\(/, "远端合并保留未确认几何");
   assert.match(flow, /routeNodeChanges\(/);
   assert.doesNotMatch(flow, /position: item\.from/, "旧的 setNodes 坐标撤销已删除");
