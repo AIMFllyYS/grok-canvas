@@ -2,7 +2,7 @@
 
 import { ControlButton } from "@/components/ui/control-button";
 
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useNodeConnections, useNodesData, useReactFlow, useStore, useViewport, type Edge, type ReactFlowState } from "@xyflow/react";
 import { Tooltip } from "@base-ui/react/tooltip";
@@ -480,8 +480,14 @@ export function PromptPanel() {
 const TextPanelBody = memo(function TextPanelBody({ nodeId, content }: { nodeId: string; content: string }) {
   const { updateNodeData } = useReactFlow();
   const lease = useEditLease(nodeId, "content");
-  return <textarea aria-label="编辑文本节点" placeholder="输入 Markdown 文本" value={content}
+  // 本地草稿：中文 composition 期间只改本地值，结束后才写入正式文档（再由保存转成一条 patch_nodes）。
+  const [draft, setDraft] = useState(content);
+  const composing = useRef(false);
+  useEffect(() => { if (!composing.current) setDraft(content); }, [content]);
+  return <textarea aria-label="编辑文本节点" placeholder="输入 Markdown 文本" value={draft}
     {...lease}
-    onChange={event => updateNodeData(nodeId, { content: event.target.value })}
+    onCompositionStart={() => { composing.current = true; }}
+    onCompositionEnd={event => { composing.current = false; updateNodeData(nodeId, { content: event.currentTarget.value }); }}
+    onChange={event => { setDraft(event.target.value); if (!composing.current) updateNodeData(nodeId, { content: event.target.value }); }}
     className="ui-prompt-editor nodrag nopan nowheel min-h-24 max-h-60 w-full resize-y bg-transparent px-1 py-2 text-base outline-none" />;
 });

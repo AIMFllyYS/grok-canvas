@@ -43,11 +43,15 @@ page.on("request", request => {
   if (!url.includes("/api/canvases/")) return;
   if (request.method() !== "POST") return;
   let body = null; try { body = request.postDataJSON(); } catch { /* ignore */ }
-  requests.push({ at: Date.now(), url: url.replace(origin, ""), kind: body?.kind ?? null, items: body?.payload?.items?.length ?? null, moves: body?.payload?.items?.map(i => ({ id: i.nodeId, from: i.from && [i.from.x, i.from.y], to: i.to && [i.to.x, i.to.y] })) ?? null, ops: Array.isArray(body?.operations) ? body.operations.map(op => op.path.join(".")) : null, action: body?.action ?? null });
+  requests.push({ at: Date.now(), url: url.replace(origin, ""), kind: body?.kind ?? null, commandId: body?.commandId ?? null, items: body?.payload?.items?.length ?? null, moves: body?.payload?.items?.map(i => ({ id: i.nodeId, from: i.from && [i.from.x, i.from.y], to: i.to && [i.to.x, i.to.y] })) ?? null, ops: Array.isArray(body?.operations) ? body.operations.map(op => op.path.join(".")) : null, action: body?.action ?? null });
 });
 const consoleErrors = [];
 const badResponses = [];
-page.on("response", response => { if (response.status() >= 400) badResponses.push({ status: response.status(), url: response.url().replace(origin, "") }); });
+page.on("response", response => {
+  if (response.status() >= 400) badResponses.push({ status: response.status(), url: response.url().replace(origin, "") });
+  if (response.url().endsWith("/commands")) void response.text().then(text => commandResponses.push({ status: response.status(), body: text.slice(0, 300) })).catch(() => {});
+});
+const commandResponses = [];
 page.on("console", msg => { if (msg.type() === "error" && !/status of 409/.test(msg.text())) consoleErrors.push(msg.text()); });
 page.on("pageerror", error => consoleErrors.push(String(error)));
 const commands = () => requests.filter(r => r.url.endsWith("/commands"));
@@ -290,7 +294,7 @@ async function drag(id, dx, dy, { steps = 120, from = "content", during } = {}) 
   await drag("n2", 60, 0, { steps: 40, during: async () => { await page.evaluate(() => window.dispatchEvent(new Event("blur"))); } });
   await sleep(1500);
   const mine = requests.slice(mark);
-  check("失焦后继续拖动只产生 1 条命令", mine.filter(r => r.url.endsWith("/commands")).length === 1 && !mine.some(r => r.url.endsWith("/operations") && r.ops?.some(p => /^(position|width|height)/.test(p))), JSON.stringify(mine.map(r => r.url.split("/").pop())));
+  check("失焦后继续拖动只产生 1 条移动命令", new Set(mine.filter(r => r.kind === "move_nodes").map(r => r.commandId)).size === 1 && !mine.some(r => r.url.endsWith("/operations") && r.ops?.some(p => /^(position|width|height)/.test(p))), JSON.stringify(mine.map(r => r.kind ?? r.url.split("/").pop())));
 }
 
 // 12) 刷新后位置来自服务端；离开前不应还有未保存/未确认的修改
@@ -316,6 +320,63 @@ async function drag(id, dx, dy, { steps = 120, from = "content", during } = {}) 
   const n1 = doc.nodes.find(n => n.id === "n1");
   check("刷新后位置持久", n1.position.x === expected.geometry.x && n1.position.y === expected.geometry.y);
   await shot("06-reloaded");
+}
+
+// 13) P2-07 用户离散动作：正文编辑 / 删除 / 撤销删除 / 复制粘贴 都是领域命令
+{
+  await page.keyboard.press("Escape");
+  const selectNode = async id => {
+    await page.locator(".react-flow__pane").click({ position: { x: 1300, y: 850 }, force: true });
+    const b = await box(id);
+    await page.mouse.click(b.x + b.width / 2, b.y + b.height - 30);
+    await sleep(400);
+    let selected = await node(id).evaluate(el => el.classList.contains("selected"));
+    if (!selected) {
+      // 被其他节点遮住时用 React Flow 的键盘选择（聚焦节点 + Enter）。
+      await node(id).focus();
+      await page.keyboard.press("Enter");
+      await sleep(400);
+      selected = await node(id).evaluate(el => el.classList.contains("selected"));
+    }
+    if (!selected) console.log(`select ${id} failed at`, JSON.stringify(b));
+  };
+  // 前面的 Space 平移把部分节点移出视口：先适应全部节点。
+  await page.getByLabel("适应全部节点").click();
+  await sleep(800);
+  await selectNode("n1");
+  const area = page.getByLabel("编辑文本节点");
+  const mark = commands().length;
+  const areaCount = await area.count();
+  if (areaCount) {
+    await area.fill("用户在面板里改的正文");
+    await sleep(1800);
+  }
+  const edits = commands().slice(mark);
+  const server = (await api("GET", `/api/canvases/${canvasId}?background=1`)).body.nodes.find(n => n.id === "n1");
+  check("正文编辑走 patch_nodes 并写入服务端", edits.some(c => c.kind === "patch_nodes") && server.data.content === "用户在面板里改的正文", JSON.stringify({ areaCount, kinds: edits.map(c => c.kind), content: server.data.content, responses: commandResponses.slice(-2) }));
+
+  await selectNode("n4");
+  const delMark = commands().length;
+  await page.keyboard.press("Delete");
+  await sleep(1800);
+  const afterDelete = (await api("GET", `/api/canvases/${canvasId}?background=1`)).body;
+  check("删除走 delete_nodes，服务端节点移除", commands().slice(delMark).some(c => c.kind === "delete_nodes") && !afterDelete.nodes.some(n => n.id === "n4"));
+  await page.keyboard.press("Control+z");
+  await sleep(1800);
+  const afterUndo = (await api("GET", `/api/canvases/${canvasId}?background=1`)).body;
+  const restoredText = afterUndo.nodes.find(n => n.data?.content === "正文 n4");
+  check("撤销删除用新 ID 重建（墓碑不复活）", !!restoredText && restoredText.id !== "n4" && commands().slice(delMark).some(c => c.kind === "add_nodes"), JSON.stringify(restoredText?.id));
+
+  await selectNode("n2");
+  const before = afterUndo.nodes.length;
+  const pasteMark = commands().length;
+  await page.keyboard.press("Control+c");
+  await page.keyboard.press("Control+v");
+  await sleep(1800);
+  const afterPaste = (await api("GET", `/api/canvases/${canvasId}?background=1`)).body;
+  check("复制粘贴走 add_nodes，ID 新分配", afterPaste.nodes.length === before + 1 && commands().slice(pasteMark).some(c => c.kind === "add_nodes") && new Set(afterPaste.nodes.map(n => n.id)).size === afterPaste.nodes.length);
+  const leaking = requests.filter(r => r.url.endsWith("/operations") && r.ops?.some(p => /^(data\.(content|prompt|draftPrompt|name)|position|width|height)/.test(p)));
+  check("operations 只剩兼容字段（无正文/提示词/名称/几何）", leaking.length === 0, JSON.stringify(leaking.slice(0, 2)));
 }
 
 check("无页面错误", consoleErrors.length === 0, consoleErrors.slice(0, 5).join(" | "));

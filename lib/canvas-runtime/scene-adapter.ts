@@ -248,17 +248,40 @@ export function createConfirmedGeometry(initial: ConfirmedSnapshot) {
   let revision = initial.revision;
   const nodes = new Map<string, NodeSummary>();
   const predictions = new Map<string, { geometry: Geometry; geometryVersion: number }>();
+  // P2-07：字段/正文/连线版本与未确认命令的预测。
+  const fieldVersions = new Map<string, number>();
+  const documentVersions = new Map<string, number>();
+  const edges = new Map<string, EdgeRecord>();
+  const predictedFields = new Map<string, number>();
+  const predictedDocuments = new Map<string, number>();
+  const predictedNodes = new Map<string, NodeSummary>();
+  const predictedEdges = new Map<string, EdgeRecord>();
+  const predictedRemovals = new Set<string>();
+  const predictedEdgeRemovals = new Set<string>();
+  const fieldKey = (id: string, field: string) => `${id}\u0000${field}`;
   const settle = () => {
     for (const [id, predicted] of predictions) {
       const node = nodes.get(id);
       if (!node || node.geometryVersion >= predicted.geometryVersion) predictions.delete(id);
     }
+    for (const [key, version] of predictedFields) if ((fieldVersions.get(key) ?? 0) >= version || !nodes.has(key.split("\u0000")[0]!) && !predictedNodes.has(key.split("\u0000")[0]!)) predictedFields.delete(key);
+    for (const [id, version] of predictedDocuments) if ((documentVersions.get(id) ?? -1) >= version) predictedDocuments.delete(id);
+    for (const id of predictedNodes.keys()) if (nodes.has(id)) predictedNodes.delete(id);
+    for (const id of predictedEdges.keys()) if (edges.has(id)) predictedEdges.delete(id);
+    for (const id of predictedRemovals) if (!nodes.has(id)) predictedRemovals.delete(id);
+    for (const id of predictedEdgeRemovals) if (!edges.has(id)) predictedEdgeRemovals.delete(id);
   };
   const load = (next: ConfirmedSnapshot) => {
     snapshot = next;
     revision = next.revision;
     nodes.clear();
     for (const node of next.nodes) nodes.set(node.id, node);
+    fieldVersions.clear();
+    for (const [nodeId, fields] of Object.entries(next.fieldVersions ?? {})) for (const [field, version] of Object.entries(fields)) fieldVersions.set(fieldKey(nodeId, field), version);
+    documentVersions.clear();
+    for (const document of next.documents) documentVersions.set(document.id, document.version);
+    edges.clear();
+    for (const edge of next.edges) edges.set(edge.id, edge);
     settle();
   };
   load(initial);
@@ -268,24 +291,75 @@ export function createConfirmedGeometry(initial: ConfirmedSnapshot) {
     const node = nodes.get(id);
     return node ? { geometry: node.geometry, geometryVersion: node.geometryVersion } : undefined;
   };
+  const predictPayload = (kind: string, payload: unknown) => {
+    const p = payload as Record<string, unknown>;
+    if (kind === "batch") for (const item of (p.commands as Array<{ kind: string; payload: unknown }>)) predictPayload(item.kind, item.payload);
+    else if (kind === "move_nodes") for (const item of p.items as MoveItem[]) predictions.set(item.nodeId, { geometry: copy(item.to), geometryVersion: item.expectedVersion + 1 });
+    else if (kind === "patch_nodes") {
+      for (const item of p.items as Array<{ nodeId: string; field: string; expectedVersion: number }>) {
+        if (item.field === "content") {
+          const documentId = (nodes.get(item.nodeId) ?? predictedNodes.get(item.nodeId))?.documentId;
+          if (documentId) predictedDocuments.set(documentId, item.expectedVersion + 1);
+        } else predictedFields.set(fieldKey(item.nodeId, item.field), item.expectedVersion + 1);
+      }
+    } else if (kind === "add_nodes") for (const node of (p.nodes as NodeSummary[])) predictedNodes.set(node.id, node);
+    else if (kind === "delete_nodes") for (const item of p.items as Array<{ nodeId: string }>) predictedRemovals.add(item.nodeId);
+    else if (kind === "edit_edges") {
+      for (const edge of (p.add as EdgeRecord[])) predictedEdges.set(edge.id, edge);
+      for (const item of (p.remove as Array<{ edgeId: string }>)) predictedEdgeRemovals.add(item.edgeId);
+    }
+  };
   return {
     load,
     get: (id: string) => nodes.get(id),
     has: (id: string) => nodes.has(id),
+    /** 服务端已有、或已入队待确认新增，且未被本地待确认删除。 */
+    known: (id: string) => (nodes.has(id) || predictedNodes.has(id)) && !predictedRemovals.has(id),
+    edgeKnown: (id: string) => (edges.has(id) || predictedEdges.has(id)) && !predictedEdgeRemovals.has(id),
+    getEdge: (id: string) => edges.get(id),
     /** move 的前置：未确认命令的预测优先，否则用服务端确认值。 */
     base,
+    fieldVersion: (id: string, field: string) => predictedFields.get(fieldKey(id, field)) ?? fieldVersions.get(fieldKey(id, field)) ?? 0,
+    documentVersion: (documentId: string) => predictedDocuments.get(documentId) ?? documentVersions.get(documentId) ?? 0,
+    documentIdOf: (id: string) => (nodes.get(id) ?? predictedNodes.get(id))?.documentId ?? null,
+    entityVersion: (id: string) => nodes.get(id)?.entityVersion ?? 0,
+    edgeVersion: (id: string) => edges.get(id)?.version ?? 0,
     pending: (id: string) => predictions.has(id),
+    /** 节点有任何未确认的本地命令（几何、字段、正文、新增）：远端合并时保留本地。 */
+    nodePending(id: string) {
+      if (predictions.has(id) || predictedNodes.has(id) || predictedRemovals.has(id)) return true;
+      const documentId = nodes.get(id)?.documentId;
+      if (documentId && predictedDocuments.has(documentId)) return true;
+      const prefix = `${id}\u0000`;
+      for (const key of predictedFields.keys()) if (key.startsWith(prefix)) return true;
+      return false;
+    },
+    edgePending: (id: string) => predictedEdges.has(id) || predictedEdgeRemovals.has(id),
     pendingGeometry: () => new Map([...predictions].map(([id, p]) => [id, copy(p.geometry)])),
     predict(items: readonly MoveItem[]) {
       for (const item of items) predictions.set(item.nodeId, { geometry: copy(item.to), geometryVersion: item.expectedVersion + 1 });
     },
+    predictCommand: (kind: string, payload: unknown) => predictPayload(kind, payload),
     unpredict(ids: Iterable<string>) { for (const id of ids) predictions.delete(id); },
+    /** 丢弃全部非几何预测（冲突改基前调用，随后按改基后的命令重新预测）。 */
+    clearPredictions() {
+      predictedFields.clear(); predictedDocuments.clear(); predictedNodes.clear(); predictedEdges.clear();
+      predictedRemovals.clear(); predictedEdgeRemovals.clear();
+    },
     applyReceipt(receipt: CommitReceipt) {
       for (const node of receipt.delta.nodes) {
         const existing = nodes.get(node.id);
         if (!existing || node.entityVersion >= existing.entityVersion) nodes.set(node.id, node);
       }
       for (const id of receipt.delta.removedNodeIds) { nodes.delete(id); predictions.delete(id); }
+      for (const document of receipt.delta.documents) documentVersions.set(document.id, Math.max(documentVersions.get(document.id) ?? 0, document.version));
+      for (const id of receipt.delta.removedDocumentIds) documentVersions.delete(id);
+      for (const edge of receipt.delta.edges) edges.set(edge.id, edge);
+      for (const id of receipt.delta.removedEdgeIds) edges.delete(id);
+      for (const ref of receipt.fieldVersions) {
+        if (ref.target === "node" && ref.field !== "geometry" && ref.field !== "entity") fieldVersions.set(fieldKey(ref.id, ref.field), Math.max(fieldVersions.get(fieldKey(ref.id, ref.field)) ?? 0, ref.version));
+        if (ref.target === "document") documentVersions.set(ref.id, Math.max(documentVersions.get(ref.id) ?? 0, ref.version));
+      }
       revision = Math.max(revision, receipt.revision);
       settle();
     },

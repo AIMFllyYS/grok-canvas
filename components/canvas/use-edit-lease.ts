@@ -7,9 +7,11 @@ import { useCanvasActions } from "./flow-canvas";
 const LEASE_RENEW_MS = 1000;
 
 export function useEditLease(nodeId: string, field: "content" | "prompt") {
-  const { canvasId, flushEdits } = useCanvasActions();
+  const { canvasId, flushEdits, actorId } = useCanvasActions();
   const flushRef = useRef(flushEdits);
   flushRef.current = flushEdits;
+  const actorRef = useRef(actorId);
+  actorRef.current = actorId;
   const owner = useRef("");
   const token = useRef<string | null>(null);
   const focused = useRef(false);
@@ -28,6 +30,9 @@ export function useEditLease(nodeId: string, field: "content" | "prompt") {
   }, [canvasId, nodeId, field]);
   const focus = useCallback(() => {
     focused.current = true;
+    // owner 必须与命令的 actorId 一致：租约只挡别人，不挡自己提交的 patch（P2-07）。
+    const actor = actorRef.current();
+    if (actor && owner.current !== actor) { owner.current = actor; token.current = null; }
     if (!owner.current) owner.current = crypto.randomUUID();
     const warn = (message: string) => { if (focused.current) toast.error(message); };
     const keepAlive = () => {

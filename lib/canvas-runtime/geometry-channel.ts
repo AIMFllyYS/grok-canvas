@@ -35,8 +35,13 @@ export type GeometryChannelOptions = {
   /** 用户选择采用对方位置时，把远端几何应用到正式工作文档。 */
   onRemote?: (geometries: Map<string, Geometry>) => void;
   onStatus?: (status: ChannelStatus) => void;
+  /** 非几何命令被服务端拒绝且无法安全改基时（P2-07）。 */
+  onRejected?: (rejection: { kind: string; message: string; ids: string[] }) => void;
   schedule?: (fn: () => void, ms: number) => () => void;
 };
+
+/** 冲突时以用户输入为准改基重发的字段：用户正在编辑的文本（持有租约）。 */
+const REBASE_FIELDS = new Set(["content", "prompt", "draftPrompt", "name"]);
 
 const copy = (g: Geometry): Geometry => ({ x: g.x, y: g.y, width: g.width, height: g.height });
 const samePoint = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
@@ -71,7 +76,42 @@ export function createGeometryChannel(options: GeometryChannelOptions) {
   });
 
   const ownPending = async () => (await outbox.loadPending(canvasId)).filter(record => record.actorId === outbox.actorId);
-  const predictFrom = (record: OutboxRecord) => { if (isMove(record)) confirmed.predict(moveItems(record)); };
+  const predictFrom = (record: OutboxRecord) => confirmed.predictCommand(record.command.kind, record.command.payload);
+
+  /** 任意用户命令（P2-07）：入队后按落库记录预测版本。 */
+  async function submitCommand(body: { kind: CanvasCommand["kind"]; payload: unknown }): Promise<{ commandId: string; actorSeq: number }> {
+    const record = await outbox.enqueue(canvasId, { kind: body.kind, payload: body.payload, storageEpoch: confirmed.storageEpoch(), baseRevision: confirmed.revision() });
+    predictFrom(record);
+    status("sending");
+    return { commandId: record.command.commandId, actorSeq: record.actorSeq };
+  }
+
+  /** 非几何冲突：正在编辑的文本字段以用户输入为准改基重发；其余（新增/删除/连线）丢弃并提示，由远端合并恢复真实状态。 */
+  async function handleOtherConflict(head: OutboxRecord): Promise<boolean> {
+    confirmed.load(await options.fetchSnapshot());
+    const items = head.command.kind === "batch"
+      ? (head.command.payload as { commands: Array<{ kind: string; payload: unknown }> }).commands
+      : [{ kind: head.command.kind, payload: head.command.payload }];
+    const patchesOnly = items.every(item => item.kind === "patch_nodes");
+    await outbox.discard(canvasId, head.actorSeq);
+    confirmed.clearPredictions();
+    for (const record of await ownPending()) predictFrom(record);
+    if (patchesOnly) {
+      const rebuilt: Array<{ nodeId: string; field: string; expectedVersion: number; value: unknown }> = [];
+      const dropped: string[] = [];
+      for (const item of items) for (const patch of (item.payload as { items: Array<{ nodeId: string; field: string; value: unknown }> }).items) {
+        if (!confirmed.known(patch.nodeId)) { dropped.push(patch.nodeId); continue; }
+        if (!REBASE_FIELDS.has(patch.field)) { dropped.push(`${patch.nodeId}/${patch.field}`); continue; }
+        const documentId = patch.field === "content" ? confirmed.documentIdOf(patch.nodeId) : null;
+        rebuilt.push({ ...patch, expectedVersion: documentId ? confirmed.documentVersion(documentId) : confirmed.fieldVersion(patch.nodeId, patch.field) });
+      }
+      if (rebuilt.length) await submitCommand({ kind: "patch_nodes", payload: { items: rebuilt } });
+      if (dropped.length) options.onRejected?.({ kind: "patch_nodes", message: head.error?.message ?? "字段已被其他修改改变", ids: dropped });
+      return true;
+    }
+    options.onRejected?.({ kind: head.command.kind, message: head.error?.message ?? "命令与服务端状态冲突", ids: [] });
+    return true;
+  }
 
   async function submit(items: readonly MoveItem[]): Promise<{ commandId: string; actorSeq: number } | null> {
     if (!items.length) return null;
@@ -132,11 +172,7 @@ export function createGeometryChannel(options: GeometryChannelOptions) {
 
   /** 返回 true 表示已静默解决，可继续发送。 */
   async function handleConflict(head: OutboxRecord): Promise<boolean> {
-    if (!isMove(head)) {
-      blocked = true;
-      status("conflict", head.error?.message ?? "命令与服务端状态冲突");
-      return false;
-    }
+    if (!isMove(head)) return handleOtherConflict(head);
     confirmed.load(await options.fetchSnapshot());
     const { intents, drop } = await collapse(head);
     const firstFrom = new Map(moveItems(head).map(item => [item.nodeId, item.from]));
@@ -252,6 +288,9 @@ export function createGeometryChannel(options: GeometryChannelOptions) {
     },
     pendingGeometry: () => confirmed.pendingGeometry(),
     isPending: (id: string) => confirmed.pending(id),
+    submitCommand,
+    /** outbox 中是否还有本画布未确认的命令。 */
+    async hasPending() { return (await ownPending()).length > 0; },
     blocked: () => blocked,
     dispose() { disposed = true; cancelRetry?.(); cancelRetry = null; },
   };
