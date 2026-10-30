@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-30T17:33:02.996Z",
+  "host": {
+    "platform": "win32",
+    "cpus": 32
+  },
+  "results": [
+    {
+      "size": 1000,
+      "metricsOn": false,
+      "firstInteractiveMs": 3284,
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5060 Laptop GPU (0x00002D19) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "harnessFrames": {
+        "count": 278,
+        "p50": 16.700000000000728,
+        "p95": 33.400000000000546,
+        "p99": 199.89999999999964,
+        "max": 300.09999999999945
+      },
+      "snapshot": null
+    },
+    {
+      "size": 1000,
+      "metricsOn": true,
+      "firstInteractiveMs": 2810,
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5060 Laptop GPU (0x00002D19) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "harnessFrames": {
+        "count": 284,
+        "p50": 16.700000000000728,
+        "p95": 33.399999999999636,
+        "p99": 200,
+        "max": 283.2999999999993
+      },
+      "snapshot": {
+        "schemaVersion": 1,
+        "environment": {
+          "media": "none",
+          "build": "production-standalone",
+          "hardware": "AMD Ryzen 9 7945HX with Radeon Graphics         / headless-chromium",
+          "version": "p2-baseline",
+          "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5060 Laptop GPU (0x00002D19) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+          "nodes": 1000
+        },
+        "capacity": 10000,
+        "size": 372,
+        "dropped": 0,
+        "overwritten": 0,
+        "metrics": {
+          "pointer_to_paint_ms": {
+            "status": "measured",
+            "count": 116,
+            "p50": 4.100000002979868,
+            "p95": 13.800000000000182,
+            "p99": 16.500000000744876,
+            "max": 16.500000002979505,
+            "mean": 4.721551725653837
+          },
+          "pointer_to_paint_unmeasured": {
+            "status": "measured",
+            "count": 3,
+            "p50": 1,
+            "p95": 1,
+            "p99": 1,
+            "max": 1,
+            "mean": 1
+          },
+          "frame_interval_ms": {
+            "status": "measured",
+            "count": 250,
+            "p50": 16.700000000000728,
+            "p95": 33.399999999999636,
+            "p99": 66.5,
+            "max": 283.2999999999993,
+            "mean": 25.9324
+          },
+          "react_commit_ms": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "full_scan_count": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "clone_count": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "outbox_items": {
+            "status": "measured",
+            "count": 3,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "max": 1,
+            "mean": 0.3333333333333333
+          },
+          "outbox_bytes": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "db_queue_ms": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "db_txn_ms": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "media_active": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "subscriptions": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "event_to_visible_ms": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "local_commit_ms": {
+            "status": "unmeasured",
+            "count": 0
+          }
+        }
+      }
+    },
+    {
+      "size": 5000,
+      "metricsOn": false,
+      "firstInteractiveMs": 13154,
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5060 Laptop GPU (0x00002D19) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "harnessFrames": {
+        "count": 304,
+        "p50": 66.69999999999709,
+        "p95": 300.09999999999854,
+        "p99": 566.7000000000044,
+        "max": 1683.300000000003
+      },
+      "snapshot": null
+    },
+    {
+      "size": 5000,
+      "metricsOn": true,
+      "firstInteractiveMs": 12940,
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5060 Laptop GPU (0x00002D19) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "harnessFrames": {
+        "count": 301,
+        "p50": 83.29999999999563,
+        "p95": 300.09999999999854,
+        "p99": 566.5999999999985,
+        "max": 1700
+      },
+      "snapshot": {
+        "schemaVersion": 1,
+        "environment": {
+          "media": "none",
+          "build": "production-standalone",
+          "hardware": "AMD Ryzen 9 7945HX with Radeon Graphics         / headless-chromium",
+          "version": "p2-baseline",
+          "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5060 Laptop GPU (0x00002D19) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+          "nodes": 5000
+        },
+        "capacity": 10000,
+        "size": 413,
+        "dropped": 0,
+        "overwritten": 0,
+        "metrics": {
+          "pointer_to_paint_ms": {
+            "status": "measured",
+            "count": 97,
+            "p50": 6.799999997761915,
+            "p95": 13.999999997766281,
+            "p99": 30.49999999850843,
+            "max": 30.49999999850843,
+            "mean": 7.29793814264789
+          },
+          "pointer_to_paint_unmeasured": {
+            "status": "measured",
+            "count": 22,
+            "p50": 1,
+            "p95": 1,
+            "p99": 1,
+            "max": 1,
+            "mean": 1
+          },
+          "frame_interval_ms": {
+            "status": "measured",
+            "count": 293,
+            "p50": 66.69999999999709,
+            "p95": 300,
+            "p99": 433.2999999999993,
+            "max": 1700,
+            "mean": 142.20170648464168
+          },
+          "react_commit_ms": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "full_scan_count": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "clone_count": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "outbox_items": {
+            "status": "measured",
+            "count": 1,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "outbox_bytes": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "db_queue_ms": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "db_txn_ms": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "media_active": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "subscriptions": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "event_to_visible_ms": {
+            "status": "unmeasured",
+            "count": 0
+          },
+          "local_commit_ms": {
+            "status": "unmeasured",
+            "count": 0
+          }
+        }
+      }
+    }
+  ]
+}

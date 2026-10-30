@@ -40,6 +40,7 @@ import { openOutbox, type PostResult } from "@/lib/canvas-runtime/outbox";
 import type { HistoryEntry } from "@/lib/canvas-runtime/history";
 import type { CanvasCommand, Geometry } from "@/lib/canvas-runtime/types";
 import { CanvasScene } from "./canvas-scene";
+import { canvasMetrics, measurePointerToPaint } from "@/lib/canvas-runtime/metrics";
 import { CanvasPreview } from "./canvas-preview";
 import { type CanvasOperation } from "@/lib/canvas-operations";
 import { generationClaim } from "@/lib/generation-claim-client";
@@ -1894,7 +1895,10 @@ export function FlowCanvas({
       });
     },
     remote: applyGeometries,
-    status: (status) => { if (status.state === "error") reportSave({ ok: false, message: status.message ?? "位置同步失败" }); },
+    status: (status) => {
+      canvasMetrics.record("outbox_items", (status as { pending?: number }).pending ?? 0);
+      if (status.state === "error") reportSave({ ok: false, message: status.message ?? "位置同步失败" });
+    },
   };
   const commitGeometry = useCallback((result: GestureResult | null) => {
     if (!result) return;
@@ -1984,6 +1988,7 @@ export function FlowCanvas({
 
   const onNodeDrag = useCallback((_event: unknown, _node: Node, draggedNodes: Node[]) => {
     dragRef.current.at = performance.now();
+    measurePointerToPaint((_event as { timeStamp?: number } | null)?.timeStamp ?? NaN);
     // 失焦／隐藏只挂起手势；事件恢复流动时重新接管，锚点丢失则就地重建。
     if (!changes.active()) changes.begin("node");
     if (!geometry.active()) geometry.begin(draggedNodes);

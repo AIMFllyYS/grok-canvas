@@ -34,6 +34,8 @@ export type DbServiceOptions = {
   /** 仅测试：开启 worker 内的测试 repository。 */
   enableTestRepository?: boolean;
   limits?: Partial<DbLimits>;
+  /** 可选诊断：每个请求从入队到回应的耗时（P6-01），默认不记录。 */
+  onTiming?: (op: DbOp, ms: number) => void;
 };
 
 export type DbServiceState = "starting" | "ready" | "closing" | "closed" | "crashed";
@@ -107,7 +109,11 @@ function createDbService(key: string, file: string, options: DbServiceOptions, o
     const timeoutMs = MAINTENANCE.has(op) ? limits.maintenanceTimeoutMs : limits.interactiveTimeoutMs;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => { settle(requestId)?.reject(new DbError("timeout", `DB 请求超过 ${timeoutMs}ms`)); }, timeoutMs);
-      pending.set(requestId, { resolve: resolve as (value: unknown) => void, reject, timer, bytes });
+      const startedAt = options.onTiming ? performance.now() : 0;
+      const done = options.onTiming
+        ? { resolve: (value: unknown) => { options.onTiming!(op, performance.now() - startedAt); (resolve as (value: unknown) => void)(value); }, reject: (error: Error) => { options.onTiming!(op, performance.now() - startedAt); reject(error); } }
+        : { resolve: resolve as (value: unknown) => void, reject };
+      pending.set(requestId, { ...done, timer, bytes });
       queuedBytes += bytes;
       try { worker.postMessage({ requestId, op, args }); }
       catch (error) { settle(requestId)?.reject(new DbError("invalid_request", error instanceof Error ? error.message : String(error))); }
