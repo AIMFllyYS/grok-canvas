@@ -155,7 +155,11 @@ test("probe：staging 里的 worker 用当前运行时完成建表、回滚、�
   assert.equal(report.health.runtime.execPath, process.execPath);
   assert.equal(path.resolve(report.health.nativeBinding), path.resolve(destination, manifest.native));
   assert.deepEqual(report.health.pragmas, { journal_mode: "wal", synchronous: 2, foreign_keys: 1, busy_timeout: 2000 });
-  assert.deepEqual(report.steps, { schema: true, write: 1, rollback: { rejected: true, count: 1 }, restartRead: 1, backup: { count: 1, sqliteVersion: report.health.sqliteVersion } });
+  assert.deepEqual(report.steps, {
+    schema: true, write: 1, rollback: { rejected: true, count: 1 }, restartRead: 1, backup: { count: 1, sqliteVersion: report.health.sqliteVersion },
+    migrate: { applied: [1, 2], current: 2 },
+    formalBackup: { status: "complete", verified: true, problems: [], restoredDb: "grok-canvas.sqlite", restoredCount: 1 },
+  });
   await rm(destination, { recursive: true, force: true });
 });
 

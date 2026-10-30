@@ -1,4 +1,5 @@
 import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { publishFile } from "./media/asset-publication";
 import path from "node:path";
 import { dataDir } from "./data-dir";
 
@@ -123,7 +124,8 @@ async function persist(buffer: Uint8Array, ext: string, snapshot?: GenerationSna
   // A successful generation response must never expose an image without its record.
   // Keep the record for recovery even if writing the downloaded image later fails.
   if (snapshot) await saveGenerationRecord(name, snapshot);
-  await writeFile(assetPath(name), buffer, { flag: "wx", flush: true });
+  // 临时文件 → flush → 校验 → 无覆盖原子发布（P3-07）；登记在调用方，失败时文件进入孤儿报告而非被删除。
+  await publishFile(assetPath(name), buffer);
   return { name, localUrl: `/api/assets/${name}`, bytes: buffer.byteLength };
 }
 
