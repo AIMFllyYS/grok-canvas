@@ -73,3 +73,18 @@ test("文本节点正文靠 nowheel 保住滚动，不被画布抢走滚轮", as
   const values = classNameValues(await readFile(new URL("../components/canvas/text-node.tsx", import.meta.url), "utf8"));
   assert.ok(values.some((value) => value.includes("nowheel") && value.includes("overflow-auto")), "正文容器既要能滚动，也不能把滚轮交给画布缩放");
 });
+
+// ---- 多选后的退出方式 ----
+// React Flow 的 .react-flow__nodesselection-rect 铺在选中集合的包围盒上（pointer-events: all），
+// 框选后组内节点全被它盖住：点不到单节点、也进不了单节点面板。
+test("多选包围盒只作视觉提示，不拦截组内节点的点选", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.react-flow__nodesselection-rect\s*\{[^}]*pointer-events:\s*none/, "多选包围盒必须让出指针事件");
+});
+test("Esc 退出多选：清空选中，不只收起面板", async () => {
+  const source = await readFile(new URL("../components/canvas/flow-canvas.tsx", import.meta.url), "utf8");
+  const escapeBranch = source.match(/if \(event\.key === "Escape"\) \{[\s\S]*?\n      \}/);
+  assert.ok(escapeBranch, "找不到 Esc 处理分支");
+  assert.match(escapeBranch[0], /selected: false/, "Esc 要清空选中集合");
+  assert.match(escapeBranch[0], /setPanelNodeId\(null\)/, "Esc 同时收起节点面板");
+});

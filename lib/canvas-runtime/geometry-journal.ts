@@ -13,34 +13,53 @@ export function createGeometryJournal(now: () => number = Date.now) {
   let moves: Map<string, GeometryMove> | null = null;
   let sampledAt = 0;
   let touched = false;
+  // moved 跨越挂起保留：中途失焦推出检查点后，整段手势仍要能一次撤销回起点。
+  let moved = false;
   let dirty = false;
   const snapshot = (): GeometryCheckpoint => ({ sequence, moves: [...moves!.values()].map(move => ({ id: move.id, from: { ...move.from }, to: { ...move.to } })) });
+  const track = (nodes: readonly Positioned[]) => {
+    for (const node of nodes) {
+      const move = moves?.get(node.id);
+      if (move && point(node.position) && !same(move.to, node.position)) {
+        move.to = { ...node.position };
+        if (!same(move.from, move.to)) moved = true;
+        dirty = touched = true;
+      }
+    }
+  };
   return {
     through: () => sequence,
+    /** 是否还持有起点锚点（挂起保留，结束后清空）。 */
+    active: () => moves !== null,
     advance(value: number) { if (Number.isSafeInteger(value)) sequence = Math.max(sequence, value); },
     begin(nodes: readonly Positioned[]) {
       sequence = Math.max(sequence + 1, now());
       sampledAt = now();
       moves = new Map(nodes.map(node => [node.id, { id: node.id, from: { ...node.position }, to: { ...node.position } }]));
-      dirty = touched = false;
+      dirty = touched = moved = false;
     },
     update(nodes: readonly Positioned[]) {
-      for (const node of nodes) {
-        const move = moves?.get(node.id);
-        if (move && point(node.position) && !same(move.to, node.position)) {
-          move.to = { ...node.position };
-          dirty = touched = true;
-        }
-      }
+      track(nodes);
     },
     sample(): GeometryCheckpoint | null {
       if (!moves || !dirty || now() - sampledAt < 250) return null;
       sampledAt = now(); dirty = false;
       return snapshot();
     },
-    finish(): GeometryCheckpoint | null {
+    /** 失焦／页面隐藏时落一个检查点，但不结束手势：锚点保留，后续位移仍算同一次移动。 */
+    suspend(nodes: readonly Positioned[] = []): GeometryCheckpoint | null {
+      track(nodes);
       const result = moves && touched ? snapshot() : null;
-      moves = null; dirty = touched = false;
+      if (moves) {
+        sequence = Math.max(sequence + 1, now());
+        sampledAt = now();
+      }
+      dirty = touched = false;
+      return result;
+    },
+    finish(): GeometryCheckpoint | null {
+      const result = moves && moved ? snapshot() : null;
+      moves = null; dirty = touched = moved = false;
       return result;
     },
   };

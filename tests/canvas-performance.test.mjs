@@ -165,6 +165,63 @@ test("坐标检查点以 250ms 采样，结束立即收敛，完全不读取正�
   } finally { await loaded.dispose(); }
 });
 
+test("失焦挂起只落检查点不结束手势，整段移动仍可一次撤销", async () => {
+  const loaded = await loadTypescript("lib/canvas-runtime/geometry-journal.ts");
+  try {
+    let now = 1000;
+    const journal = loaded.module.createGeometryJournal(() => now);
+    const start = { id: "n", position: { x: 0, y: 0 } };
+    journal.begin([start]);
+    now += 10;
+    journal.update([{ id: "n", position: { x: 10, y: 0 } }]);
+    const first = journal.suspend([{ id: "n", position: { x: 10, y: 0 } }]);
+    assert.deepEqual(first.moves, [{ id: "n", from: { x: 0, y: 0 }, to: { x: 10, y: 0 } }], "挂起要落检查点");
+    now += 10;
+    journal.update([{ id: "n", position: { x: 90, y: 0 } }]);
+    const second = journal.suspend([{ id: "n", position: { x: 90, y: 0 } }]);
+    assert.ok(second.sequence > first.sequence, "挂起后的检查点序号仍然单调");
+    assert.deepEqual(journal.finish().moves, [{ id: "n", from: { x: 0, y: 0 }, to: { x: 90, y: 0 } }], "挂起不丢起点，一次撤销就回手势开始");
+
+    // 挂起后直接松手：仍要给出整段移动，不能因为 touched 被重置而丢掉撤销。
+    journal.begin([start]);
+    now += 10;
+    journal.update([{ id: "n", position: { x: 30, y: 0 } }]);
+    assert.ok(journal.suspend([{ id: "n", position: { x: 30, y: 0 } }]));
+    assert.deepEqual(journal.finish().moves, [{ id: "n", from: { x: 0, y: 0 }, to: { x: 30, y: 0 } }]);
+
+    // 挂起后没有位移再结束：不产生空移动，也不残留内容。
+    journal.begin([start]);
+    assert.equal(journal.active(), true, "开始后持有起点锚点");
+    assert.equal(journal.suspend([start]), null);
+    assert.equal(journal.active(), true, "挂起不丢锚点");
+    assert.equal(journal.finish(), null);
+    assert.equal(journal.active(), false, "结束后不再持有锚点");
+  } finally { await loaded.dispose(); }
+});
+
+test("拖拽中途失焦只挂起手势：保存闸门不开，指针在别处松开后由看门狗收尾", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../components/canvas/flow-canvas.tsx", import.meta.url), "utf8");
+  const resetGesture = source.match(/const resetGesture = \(\) => \{[\s\S]*?\n    \};/);
+  assert.ok(resetGesture, "找不到失焦复位处理");
+  assert.match(resetGesture[0], /dragInFlight\(\)/, "只有拖拽事件停滞才把失焦当作松手");
+  assert.match(resetGesture[0], /geometry\.suspend\(/, "拖拽在途只能挂起坐标日志");
+  assert.doesNotMatch(resetGesture[0], /changes\.reset\(\)/, "拖拽在途不得打开保存闸门");
+  // 真正收尾走 closeDragGesture：坐标日志结束、手势闸门复位、清除 dragging 残留。
+  const closeDrag = source.match(/const closeDragGesture = \(\) => \{[\s\S]*?\n    \};/);
+  assert.ok(closeDrag, "找不到拖拽收尾处理");
+  assert.match(closeDrag[0], /finishGeometry\(/, "收尾要把这次移动交给撤销栈");
+  assert.match(closeDrag[0], /changes\.reset\(\)/);
+  assert.match(source, /const watchdog = window\.setInterval\([\s\S]{0,400}?\}, 500\);/, "失焦松手必须有看门狗收尾");
+  const onNodeDrag = source.match(/const onNodeDrag = useCallback\([\s\S]*?\n  \}, \[changes[^\]]*\]\);/);
+  assert.ok(onNodeDrag, "找不到拖动中的处理函数");
+  assert.match(onNodeDrag[0], /if \(!changes\.active\(\)\) changes\.begin\("node"\)/, "继续拖动时必须重新登记手势");
+  assert.match(onNodeDrag[0], /if \(!geometry\.active\(\)\) geometry\.begin\(draggedNodes\)/, "锚点丢失后就地重建");
+  const onNodeDragStop = source.match(/const onNodeDragStop = useCallback\([\s\S]*?\n  \}, \[finishGeometry[^\]]*\]\);/);
+  assert.ok(onNodeDragStop);
+  assert.match(onNodeDragStop[0], /dragRef\.current\.active = false/, "松手要清掉拖拽在途标记");
+});
+
 test("检查点恢复保留同时修改的正文，不复活删除节点，不覆盖冲突坐标", async () => {
   const loaded = await loadTypescript("lib/canvas-runtime/geometry-journal.ts");
   try {

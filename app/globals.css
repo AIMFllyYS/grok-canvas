@@ -290,6 +290,9 @@ html:root :is(input, textarea, [contenteditable="true"]) { caret-color: var(--ui
 }
 
 .canvas-tool-overlay { touch-action: none; }
+/* 多选包围盒只作视觉提示：它盖住了框选范围内的节点、吃掉了点选；
+   整组拖动改为直接拖组内任意节点（React Flow 原生就把选中集合一起移动）。 */
+.react-flow__nodesselection-rect { pointer-events: none; }
 .canvas-hand .react-flow__pane, .canvas-hand .react-flow__node { cursor: grab; }
 .canvas-hand .react-flow__pane:active, .canvas-hand .react-flow__node.dragging { cursor: grabbing; }
 .ui-library-drawer { animation: library-enter 140ms ease-out; }

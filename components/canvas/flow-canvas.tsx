@@ -189,6 +189,9 @@ const CanvasActionsContext = createContext<CanvasActions>({
   requestAttachmentUpload: () => {},
 });
 
+/** 拖拽事件停滞超过这个时长，才认为指针已在别处松开（隐藏窗口里 rAF 会降到约 1Hz）。 */
+const DRAG_STALE_MS = 1500;
+
 export type { GenerateOverrides };
 
 export function useCanvasActions(): CanvasActions {
@@ -389,6 +392,8 @@ export function FlowCanvas({
     return clock && undoTargets(entry).every(key => (clock.get(key) ?? 0) === (remoteClockRef.current.get(key) ?? 0));
   };
   const clipboardRef = useRef<{ nodes: Node[]; edges: Edge[] } | null>(null);
+  // 拖拽在途：React Flow 的 onNodeDrag* 事件流还活着时，失焦不能让保存闸门提前打开。
+  const dragRef = useRef({ active: false, at: 0 });
 
   // 新建类操作入撤销栈（新建节点/上传/粘贴/连线）
   const pushAdd = useCallback((addedNodes: Node[], addedEdges: Edge[]) => {
@@ -672,20 +677,43 @@ export function FlowCanvas({
     const warn = (event: BeforeUnloadEvent) => {
       if (pendingUploads.current.size || changes.dirty() || dirtyVersion.current !== savedVersion.current) { event.preventDefault(); event.returnValue = ""; }
     };
+    const dragInFlight = () => dragRef.current.active && performance.now() - dragRef.current.at < DRAG_STALE_MS;
+    // 真正收尾一次拖拽：坐标日志保留到起点，可整段撤销；同时打开保存闸门。
+    const closeDragGesture = () => {
+      dragRef.current.active = false;
+      finishGeometry(latestRef.current.nodes);
+      changes.reset();
+      setDragging(false);
+      setNodesFromSync(current => current.map(node => node.dragging || node.resizing ? { ...node, dragging: false, resizing: false } : node));
+    };
     const resetGesture = () => {
       setDragging(false);
       if (!changes.active()) return;
-      finishGeometry();
-      changes.reset();
-      setNodesFromSync(current => current.map(node => node.dragging || node.resizing ? { ...node, dragging: false, resizing: false } : node));
+      // 指针还按在节点上（事件仍在流）：只落检查点、保留手势闸门，
+      // 否则 500ms 防抖保存会把拖拽中途的坐标当成一次完整移动写进服务端。
+      if (dragInFlight()) {
+        persistGeometry(geometry.suspend(latestRef.current.nodes));
+        return;
+      }
+      closeDragGesture();
     };
     const onVisibility = () => { if (document.hidden) resetGesture(); };
+    // 指针在别处松开（切窗/最小化）时没人再发 onNodeDragStop，事件停滞后自行收尾，
+    // 避免手势闸门永久关闭、后续修改再也保存不了。
+    const watchdog = window.setInterval(() => {
+      if (!dragRef.current.active) return;
+      if (performance.now() - dragRef.current.at < DRAG_STALE_MS) return;
+      // 可见且聚焦时可能只是按住不动，交给正常事件收尾。
+      if (!document.hidden && document.hasFocus()) return;
+      closeDragGesture();
+    }, 500);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("blur", resetGesture);
     window.addEventListener("beforeunload", warn);
     return () => {
       window.removeEventListener("blur", resetGesture);
       document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(watchdog);
       clearDraftTimer();
       mounted.current = false;
       window.removeEventListener("beforeunload", warn);
@@ -694,7 +722,7 @@ export function FlowCanvas({
         saveTimerRef.current = null;
       }
     };
-  }, [changes, clearDraftTimer, finishGeometry, setNodesFromSync]);
+  }, [changes, clearDraftTimer, finishGeometry, geometry, latestRef, persistGeometry, setNodesFromSync]);
 
   const registerAssets = useCallback((items: CanvasLibraryAsset[]) => {
     const next = mergeLibraryAssets(libraryRef.current, items);
@@ -1644,6 +1672,8 @@ export function FlowCanvas({
         }
         setMenu(null);
         setPanelNodeId(null);
+        // 多选包围盒会盖住组内节点，键盘是退出多选的可靠方式。
+        setNodesFromSync(current => current.some(node => node.selected) ? current.map(node => node.selected ? { ...node, selected: false } : node) : current);
         return;
       }
       if (event.target instanceof HTMLVideoElement) return;
@@ -1707,10 +1737,11 @@ export function FlowCanvas({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [desktopAvailable, closeCandidates, copyNodes, deleteSelection, duplicateNodes, pasteClipboard, redo, undo, zoomIn, zoomOut, zoomTo]);
+  }, [desktopAvailable, closeCandidates, copyNodes, deleteSelection, duplicateNodes, pasteClipboard, redo, setNodesFromSync, undo, zoomIn, zoomOut, zoomTo]);
 
   // ---- 移动（拖动结束记一次撤销）----
   const onNodeDragStart = useCallback((_event: unknown, _node: Node, draggedNodes: Node[]) => {
+    dragRef.current = { active: true, at: performance.now() };
     changes.begin("node");
     clearDraftTimer();
     setDragging(true);
@@ -1720,11 +1751,16 @@ export function FlowCanvas({
   }, [closeCandidates, changes, geometry, clearDraftTimer]);
 
   const onNodeDrag = useCallback((_event: unknown, _node: Node, draggedNodes: Node[]) => {
+    dragRef.current.at = performance.now();
+    // 失焦／隐藏只挂起手势；事件恢复流动时重新接管，锚点丢失则就地重建。
+    if (!changes.active()) changes.begin("node");
+    if (!geometry.active()) geometry.begin(draggedNodes);
     geometry.update(draggedNodes);
     persistGeometry(geometry.sample());
-  }, [geometry, persistGeometry]);
+  }, [changes, geometry, persistGeometry]);
 
   const onNodeDragStop = useCallback((_event: unknown, _node: Node, draggedNodes: Node[]) => {
+    dragRef.current.active = false;
     finishGeometry(draggedNodes);
     changes.end("node");
     setDragging(false);
