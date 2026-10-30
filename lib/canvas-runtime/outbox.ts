@@ -31,7 +31,7 @@ export type CheckpointRecord = { canvasId: string; actorId: string; sequence: nu
 export type Watermark = { ackSeq: number; revision: number; eventSeq: number };
 
 export class OutboxError extends Error {
-  readonly code: "queue_full" | "not_found" | "mismatch";
+  readonly code: "queue_full" | "not_found" | "mismatch" | "not_conflict";
   constructor(code: OutboxError["code"], message: string) {
     super(message);
     this.name = "OutboxError";
@@ -215,6 +215,20 @@ export async function openOutbox(options: OpenOutboxOptions = {}) {
     markSent: (canvasId: string, actorSeq: number) => update(canvasId, actorSeq, record => record.state === "queued" ? { ...record, state: "sent" } : null),
     markConflict: (canvasId: string, actorSeq: number, error?: { code?: string; message?: string }) =>
       update(canvasId, actorSeq, record => ({ ...record, state: "conflict", error: { code: error?.code ?? "field_conflict", message: error?.message ?? "命令与服务端状态冲突" } })),
+    /**
+     * 丢弃一条已由用户/仲裁处理的冲突记录（P2-06）。只接受 state=conflict：
+     * queued/sent 的记录可能已被服务端接收，不能静默丢掉。计数与删除同事务。
+     */
+    discard: (canvasId: string, actorSeq: number) =>
+      inTransaction(db, ["outbox", "client_state"], "readwrite", async (tx) => {
+        const outboxStore = tx.objectStore("outbox"), state = tx.objectStore("client_state");
+        const record = await request(outboxStore.get([canvasId, actorId, actorSeq])) as OutboxRecord | undefined;
+        if (!record) throw new OutboxError("not_found", `待确认命令 ${canvasId}#${actorSeq} 不存在`);
+        if (record.state !== "conflict") throw new OutboxError("not_conflict", `只能丢弃已标记 conflict 的命令（当前 ${record.state}）`);
+        outboxStore.delete([canvasId, actorId, actorSeq]);
+        const totals = (await request(state.get("totals")) as Totals | undefined) ?? { key: "totals", items: 1, bytes: record.bytes };
+        state.put({ ...totals, items: Math.max(0, totals.items - 1), bytes: Math.max(0, totals.bytes - record.bytes) });
+      }),
     /** 确认、水位与检查点清理同事务：只删除该 commandId，不碰其他序号或画布。 */
     ack: (receipt: CommitReceipt, target: { canvasId: string; actorSeq: number; checkpointThrough?: number }) =>
       inTransaction(db, ["outbox", "client_state", "checkpoints"], "readwrite", async (tx) => {

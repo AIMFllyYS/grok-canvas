@@ -1,0 +1,38 @@
+{
+  "taskId": "P2-06",
+  "sourceCommit": "de8b241e54b1f954236af1a62921c4d8d8d35192",
+  "status": "passed",
+  "baseCommit": "e684acde",
+  "red": {
+    "command": "node --test tests/canvas-scene.test.mjs",
+    "exitCode": 1,
+    "assertion": "gesture-store / scene-adapter / geometry-channel 为只抛“未实现”的桩，entities 路由不存在，edit-lease 不支持批量，FlowCanvas 未接线：16/16 全部失败。"
+  },
+  "checks": [
+    {"command": "node --test tests/canvas-scene.test.mjs", "exitCode": 0, "evidence": "16/16：手势覆盖层只处理参与者、移回原点无结果、drop/cancel 清锁；2000 节点 120 帧拖动 n1：正式文档冻结不变、change-tracker 不标脏、无关节点同一对象、参与节点 data 引用不变、只新建 120 个投影对象，结束只产生 1 个移动；onNodesChange 分流（选择/自然测量进正式文档，resize 与左上角位置进覆盖层，键盘方向键为离散移动，删除清锁）；失焦收尾后迟到的 dragging=true 重新关闭保存闸门；旧保存剥离受管节点几何；远端合并保留未确认几何；move 以服务端确认几何为起点、未确认命令作为下一次前置版本；真实 outbox（fake-indexeddb）下 120 帧拖动结束 outbox 恰好 +1、回执记 1 条历史、撤销为条件命令；群组 100 节点 1 条命令 1 次撤销，有人改其中一个则整条拒绝；仅版本前进时静默改基，同几何冲突交给用户（保留我的/采用对方），决定前不回弹；恢复屏障与 outbox.discard；检查点/草稿坐标转命令，起点不符进入仲裁；entities 与批量租约路由；FlowCanvas 接线源码约束"},
+    {"command": "node --test tests/canvas-interaction.test.mjs tests/canvas-performance.test.mjs", "exitCode": 0, "evidence": "含在 pnpm test 中全部通过：nodrag/nowheel、Esc 清选择、失焦挂起/看门狗收尾、onNodeDrag 重建锚点等既有约束保留"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "10 个套件共 370 项（新增 canvas-scene 16 项）"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "构建与 stage-standalone 通过，路由表含 /api/canvases/[id]/entities；tsconfig 副作用已还原"},
+    {"command": "node scripts/e2e/canvas-gesture.e2e.mjs http://127.0.0.1:3297/ <out>", "exitCode": 0, "evidence": "脚本化 Playwright（headless Chromium，1440×900）对隔离 standalone 产物（独立端口 3297、临时数据目录）30/30 通过，见 manual"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "beforeAfter": {
+    "before": "拖动每帧 applyNodesChange 生成新 nodes 数组并重渲染整个 FlowCanvas；松手后位置随 500ms 防抖的整图 diff 走 operations；撤销栈 move 条目直接 setNodes 回写坐标，不校验他人修改。",
+    "after": "拖动/resize 期间只更新 gesture-store，CanvasScene 独自订阅并投影，正式工作文档与 FlowCanvas 不变；松手产生 1 条 move_nodes（from/expectedVersion 取服务端确认几何）进 outbox，回执写确认缓存并按 P2-04 记历史；撤销/重做是条件命令。",
+    "legacyAdapter": "components/canvas/flow-canvas.tsx 中唯一的 `const legacyAdapter`：非几何业务动作仍经旧 operations 整图差异保存，并在此剥离受命令管理节点的 position/width/height。P2-07 把离散动作命令化后删除。"
+  },
+  "manual": {
+    "status": "passed",
+    "evidence": "按用户授权由 Agent 用浏览器端测（不是用户本人手测）：scripts/e2e/canvas-gesture.e2e.mjs 驱动 headless Chromium 真实鼠标/键盘事件，30/30 通过。四类正文的文本节点从正文区按下可拖、局部控件按下拖动不移动、nowheel 正文滚动且视口不动、Space+拖动平移视口且不产生几何命令、右下角 handle resize 提交 1 条带新尺寸的命令、提示词框中文输入在拖动其他节点后保留；120 帧拖动途中 0 个保存/命令请求、结束 1 条 move_nodes、租约 claim/renew/release 成对；移回原点 0 条命令；Ctrl 多选群组 1 条命令、Ctrl+Z 一次恢复整组、Ctrl+Shift+Z 重做；拖动中 Agent 改正文两者都保留且不回弹；拖动中 Agent 移动同一节点出现冲突提示、待决时不回弹、选择保留我的位置后以远端版本重提交；失焦后继续拖动只 1 条命令；刷新前 outbox 已清空、无 beforeunload 拦截、刷新后位置持久；全程无页面错误，唯一非 2xx 是冲突场景预期的 /commands 409。图片/视频/素材节点的拖动走同一路径（类型无关），本轮未逐一拖动媒体节点。"
+  },
+  "act": "Check 中修正：E2E 脚本首轮的 4 项失败都来自脚本本身（复用旧画布导致起点不同、React Flow 的拖动阈值让落点比指针少约 1px、Shift 不是本项目的多选键、点击图片节点时被相邻文本节点的 resize 线挡住），逐项改为按实际起点/节点位置断言后通过；产品代码未因此改动。设计取舍：确认几何来自新增的 entities 路由（?fields=geometry 不带正文）；媒体节点拖动不提交测量尺寸（服务端仍是 280×240 回退），resize 才写显式尺寸；服务端尚未认识的新节点的几何仍随旧保存的新增操作写入，保存后刷新一次版本即转为命令管理。没有改 node_modules/React Flow 私有 store，没有改媒体加载/LOD，没有清 IndexedDB。",
+  "risks": [
+    "Agent 与图片/视频回写仍走旧路径（P2-08 改命令）：它们改几何时只会使客户端版本落后，下一次移动先冲突再由通道改基或交给用户，不会静默覆盖。",
+    "冲突提示需要用户点选；提示不可滑动关闭，决定前该画布后续几何命令暂停发送（outbox 语义），但不丢修改。",
+    "非受管（新建未保存）节点的移动不进入几何历史，保存后的移动才可撤销。",
+    "手测由 Agent 在 headless Chromium 中执行；真实触控板/高 DPI/Electron 窗口未覆盖，建议用户抽查一次拖动与冲突提示。"
+  ],
+  "next": "P2-07"
+}
