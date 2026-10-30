@@ -18,7 +18,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace && pnpm test:agent && pnpm test:commands && pnpm test:planning",
+    "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace && pnpm test:agent && pnpm test:commands && pnpm test:db && pnpm test:planning",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "next dev -H 127.0.0.1 -p 3210",
     "build": "next build",
@@ -40,6 +40,7 @@
     "test:agent": "node --test tests/agent.test.mjs tests/agent-sdk.test.mjs",
     "test:commands": "node --test tests/command-schema.test.mjs tests/canvas-entity-store.test.mjs tests/canvas-commands.test.mjs tests/canvas-history-leases.test.mjs tests/canvas-outbox.test.mjs",
     "test:planning": "node --test tests/workstation-plan.test.mjs",
+    "test:db": "node --test tests/db-worker.test.mjs",
     "plan:validate": "node scripts/planning/validate-plan.mjs",
     "plan:publish": "node scripts/planning/publish-issues.mjs"
   },
@@ -104,6 +105,7 @@
     "@tailwindcss/postcss": "^4.3.3",
     "@xyflow/react": "^12.11.6",
     "ai": "^7.0.153",
+    "better-sqlite3": "13.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cn": "^0.2.6",
