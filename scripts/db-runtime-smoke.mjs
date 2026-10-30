@@ -15,11 +15,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkStandalone, currentBuildDir } from "./build-root.mjs";
 import { auditPackage, nativeTarget, stageDbRuntime, verifyDbRuntime } from "./db-runtime.mjs";
+import { stageMediaRuntime, verifyMediaRuntime } from "./media-runtime.mjs";
 
 const require = createRequire(import.meta.url);
 const desktop = require("../desktop/runtime.cjs");
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const probe = path.join(root, "scripts", "db-runtime-probe.cjs");
+const mediaProbe = path.join(root, "scripts", "media-runtime-probe.cjs");
 const target = (process.argv.find((arg) => arg.startsWith("--target=")) || "").slice(9);
 if (!["node", "standalone", "electron"].includes(target)) {
   console.error("用法：node scripts/db-runtime-smoke.mjs --target=node|standalone|electron");
@@ -49,6 +51,16 @@ function runProbe(execPath, workerPath, dataDir, env) {
   const result = spawnSync(execPath, [probe, workerPath, dataDir], { encoding: "utf8", timeout: 90_000, env, windowsHide: true });
   const line = (result.stdout || "").split(/\r?\n/).find((l) => l.startsWith("DB_PROBE "));
   return { status: result.status, signal: result.signal, stderr: (result.stderr || "").slice(-2000), report: line ? JSON.parse(line.slice(9)) : null };
+}
+
+/** P4-02：在被测运行时里跑媒体派生 Worker（sharp native），并要求 sharp 来自 expectedRoot（staging 副本）。 */
+function runMediaProbe(execPath, workerPath, env, label, expectedRoot) {
+  const result = spawnSync(execPath, [mediaProbe, workerPath, path.join(work, `media-${label}`)], { encoding: "utf8", timeout: 90_000, env, windowsHide: true });
+  const line = (result.stdout || "").split(/\r?\n/).find((l) => l.startsWith("MEDIA_PROBE "));
+  const report = line ? JSON.parse(line.slice(12)) : null;
+  expect(result.status === 0 && report?.ok, `${label}: 媒体派生 probe 失败 ${report?.error || (result.stderr || "").slice(-500)}`);
+  if (expectedRoot) expect(path.resolve(report?.selftest?.sharpPath || "").startsWith(path.resolve(expectedRoot)), `${label}: sharp 必须从 ${expectedRoot} 加载，实际 ${report?.selftest?.sharpPath}`);
+  return report;
 }
 
 async function negativeChecks(execPath, runtimeDir, env, label) {
@@ -128,6 +140,10 @@ try {
     const copy = path.join(work, "runtime");
     await stageDbRuntime({ projectRoot: root, destination: copy });
     report.negative = await negativeChecks(process.execPath, copy, baseEnv, "node");
+    report.media = runMediaProbe(process.execPath, path.join(root, "lib", "media", "derivative-worker.cjs"), baseEnv, "node");
+    const mediaCopy = path.join(work, "media-runtime");
+    const mediaManifest = await stageMediaRuntime({ projectRoot: root, destination: mediaCopy });
+    report.mediaStaged = runMediaProbe(process.execPath, path.join(mediaCopy, mediaManifest.worker), baseEnv, "node-staged", mediaCopy);
   } else if (target === "standalone") {
     const build = checkStandalone(currentBuildDir(root));
     const runtimeDir = path.join(build.standalone, "db-runtime");
@@ -141,6 +157,10 @@ try {
     report.server = await bootServer(process.execPath, build.server, build.standalone, baseEnv, 3291);
     expect(report.server.ok, `standalone: server.js 启动失败 ${report.server.error || report.server.status}`);
     report.negative = await negativeChecks(process.execPath, runtimeDir, baseEnv, "standalone");
+    const mediaDir = path.join(build.standalone, "media-runtime");
+    const mediaManifest = await verifyMediaRuntime(mediaDir);
+    expect(mediaManifest.target === nativeTarget(), `standalone: media-runtime 目标 ${mediaManifest.target} 与本机不符`);
+    report.media = runMediaProbe(process.execPath, path.join(mediaDir, mediaManifest.worker), baseEnv, "standalone", mediaDir);
     const audit = await auditPackage(build.standalone, { projectRoot: root });
     // Windows + pnpm 下 Next 把 standalone/node_modules 写成指回仓库 store 的 junction：standalone 只在构建机运行，
     // 不分发；分发的桌面包由 desktop:deps 重新平铺安装，electron 目标对任何包外链接都判失败。
@@ -176,6 +196,10 @@ try {
     report.server = await bootServer(electronExe, launch.entry, launch.cwd, env, 3292);
     expect(report.server.ok, `electron: 包内 server.js 启动失败 ${report.server.error || report.server.status}`);
     report.negative = await negativeChecks(electronExe, runtimeDir, env, "electron");
+    const mediaDir = path.join(appDir, "media-runtime");
+    const mediaManifest = await verifyMediaRuntime(mediaDir);
+    report.media = runMediaProbe(electronExe, path.join(mediaDir, mediaManifest.worker), env, "electron", mediaDir);
+    expect(report.media?.runtime?.electron === electronVersion, `electron: 媒体 probe 必须运行在 Electron ${electronVersion}`);
     const audit = await auditPackage(appDir, { projectRoot: root });
     report.package = { fileCount: audit.files.length, natives: audit.files.filter((f) => f.endsWith(".node")), forbidden: audit.forbidden };
     expect(audit.forbidden.length === 0, `electron: 包审计失败 ${JSON.stringify(audit.forbidden.slice(0, 5))}`);
@@ -191,5 +215,5 @@ report.ok = failures.length === 0;
 const clean = sanitize(report);
 await writeFile(path.join(outRoot, `${target}-report.json`), `${JSON.stringify(clean, null, 2)}\n`);
 const h = clean.probe?.health;
-console.log(`DB_SMOKE ${JSON.stringify({ target, ok: clean.ok, execPath: h?.runtime.execPath, electron: h?.runtime.electron, modules: h?.runtime.modules, napi: h?.runtime.napi, driver: h?.driverVersion, sqlite: h?.sqliteVersion, worker: clean.probe?.workerPath, native: h?.nativeBinding, steps: clean.probe?.steps, server: clean.server, failures })}`);
+console.log(`DB_SMOKE ${JSON.stringify({ target, ok: clean.ok, execPath: h?.runtime.execPath, electron: h?.runtime.electron, modules: h?.runtime.modules, napi: h?.runtime.napi, driver: h?.driverVersion, sqlite: h?.sqliteVersion, worker: clean.probe?.workerPath, native: h?.nativeBinding, steps: clean.probe?.steps, media: clean.media && { ok: clean.media.ok, sharp: clean.media.selftest?.versions, electron: clean.media.runtime?.electron }, server: clean.server, failures })}`);
 process.exitCode = clean.ok ? 0 : 1;
