@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { assetPath, isSafeAssetName } from "../assets";
 import { assertClientCommand, canonicalCommand, CommandValidationError, LIMITS, parseCommand } from "./command-schema";
 import { reduceCommand, ReducerError } from "./command-reducer";
-import { jsonCommandRepository, type CommandRepository, type CommandTxn } from "./json-repository";
+import { jsonCommandRepository, loadEntitySnapshot, type CommandRepository, type CommandTxn } from "./json-repository";
 import { getLeaseService, isLeaseField, LEASE_FIELDS, type LeaseRef, type LeaseService } from "./lease-service";
 import { COMMAND_ERROR_STATUS, type BatchItem, type CanvasCommand, type CommandErrorBody, type CommandErrorCode, type CommandErrorField, type CommitReceipt } from "./types";
 
@@ -39,7 +39,60 @@ export function toCommandError(error: unknown): CommandError | null {
   if (error instanceof CommandValidationError) return new CommandError("invalid_command", error.message, { status: error.status, fields: error.fields });
   const code = (error as NodeJS.ErrnoException | null)?.code;
   if (typeof code === "string" && /^E[A-Z]+$/.test(code)) return new CommandError("storage_unavailable", "画布存储暂不可用，请稍后重试");
+  // SQLite 忙/锁：事务已整体回滚，可原样重试保存；服务端不会因此重新发起收费生成。
+  if (typeof code === "string" && /^SQLITE_(BUSY|LOCKED)/.test(code)) return new CommandError("storage_unavailable", "画布数据库正忙，请稍后重试", { retryAfterMs: 250 });
   return null;
+}
+
+/** C6 增量查询结果：整条事务事件为单位，不拆半个 Delta。 */
+export type ChangesPage = {
+  events: Array<{ eventSeq: number; revision: number; commandId: string | null; delta: unknown; oversized?: boolean }>;
+  fromRevision: number;
+  toRevision: number;
+  hasMore: boolean;
+  storageEpoch: string;
+};
+
+/** 显式选择的命令存储（仓库 + 增量查询）。未选择时使用 JSON 仓库。 */
+export type CommandStore = {
+  repository: CommandRepository;
+  listChanges(params: { canvasId: string; afterRevision: number; limit?: number; storageEpoch?: string }): Promise<ChangesPage>;
+};
+
+let selectedStore: CommandStore | null = null;
+/** 只在测试/明确的特性开关下调用；传 null 恢复 JSON。不会自动切换用户主库。 */
+export function selectCommandStore(store: CommandStore | null) { selectedStore = store; }
+export const selectedCommandStore = () => selectedStore;
+const repositoryFor = (context: CommandContext) => context.repository ?? selectedStore?.repository ?? jsonCommandRepository;
+
+export class ChangesError extends Error {
+  readonly code: string;
+  readonly status: number;
+  constructor(code: string, message: string, status: number) { super(message); this.name = "ChangesError"; this.code = code; this.status = status; }
+}
+
+/**
+ * GET changes 的服务端实现。JSON 仓库不保存事件日志：只有 afterRevision 等于当前修订时返回空页，
+ * 否则 410 snapshot_required（客户端改走实体快照）。
+ */
+export async function listCanvasChanges(params: { canvasId: string; afterRevision: number; limit?: number; storageEpoch?: string }): Promise<ChangesPage> {
+  const store = selectedStore;
+  try {
+    if (store) return await store.listChanges(params);
+    const snapshot = await loadEntitySnapshot(params.canvasId);
+    if (!snapshot) throw new ChangesError("not_found", "画布不存在或已删除", 404);
+    if (params.storageEpoch !== undefined && params.storageEpoch !== snapshot.storageEpoch) throw new ChangesError("stale_epoch", `存储纪元已变为 ${snapshot.storageEpoch}`, 409);
+    if (params.afterRevision > snapshot.revision) throw new ChangesError("invalid_request", `afterRevision 超过当前修订 ${snapshot.revision}`, 400);
+    if (params.afterRevision < snapshot.revision) throw new ChangesError("snapshot_required", "JSON 存储没有事件日志，需要重新获取快照", 410);
+    return { events: [], fromRevision: snapshot.revision, toRevision: snapshot.revision, hasMore: false, storageEpoch: snapshot.storageEpoch };
+  } catch (error) {
+    if (error instanceof ChangesError) throw error;
+    const known = error as { code?: unknown; status?: unknown; message?: string };
+    if (typeof known?.code === "string" && typeof known.status === "number") throw new ChangesError(known.code, known.message ?? known.code, known.status);
+    const command = toCommandError(error);
+    if (command) throw new ChangesError(command.code, command.message, command.status);
+    throw error;
+  }
 }
 
 export type CommandOrigin = "client" | "agent" | "server" | "migration";
@@ -110,7 +163,7 @@ export async function executeCommand(input: unknown, context: CommandContext): P
     const command = parseCommand(input);
     if (context.origin === "client") assertClientCommand(command);
     const hash = commandHash(command);
-    const repository = context.repository ?? jsonCommandRepository;
+    const repository = repositoryFor(context);
     outcome = await repository.transact<Outcome>(command.canvasId, (txn) => runInTransaction(txn, command, hash, context));
   } catch (error) {
     throw toCommandError(error) ?? error;
@@ -136,7 +189,7 @@ export async function executeServerCommand(
   if (context.origin === "client") throw new CommandError("invalid_command", "客户端不能使用服务端命令入口");
   let outcome: Outcome | "skipped" | null;
   try {
-    const repository = context.repository ?? jsonCommandRepository;
+    const repository = repositoryFor(context);
     outcome = await repository.transact<Outcome | "skipped">(canvasId, (txn) => {
       const body = build(txn.reader, { revision: txn.revision });
       if (!body) return "skipped";
