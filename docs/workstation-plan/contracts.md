@@ -30,6 +30,7 @@ type Subscription = () => void;
 - `createCanvasStore(seed)` 暴露 `getNode(id) / getDocument(id) / getEdge(id) / getNodeIds() / subscribeNode(id, fn) / subscribeDocument(id, fn) / subscribeStructure(fn) / applyDelta(delta) / dispose()`。
 - `useSyncExternalStore` 的订阅建立/清理可验证；单节点内容更新不通知无关节点或结构订阅。
 - 新节点注册表固定支持 image/video/asset/canvasText，记录 `type/schemaVersion/validate/migrate`；未知类型在导入时明确阻断/报告，不静默抹除。
+- 字段归属（P2-01 固化于 `lib/canvas-runtime/node-registry.ts`）：`user` 可由 patch_nodes 写；`service` 只由服务端命令写；`legacy` 仅新增/导入接受、不可 patch。旧 React Flow 顶层 `draggable:false`（固定节点）映射为公共用户字段 `data.pinned=true`；Agent addNodes 写入的跨类型默认值（image 的 duration/audio/uploadInputs，video 的 quality/generationCount/uploadAttachments）与粘贴副本写入文本/素材节点的 status/generationId/appliedGenerationId/errorMessage 登记为 legacy。旧文档转换须在 `cleanCanvas` 之后进行；未测量的媒体节点几何按 280×240 回退。影响：P2-02（转换）、P2-06（投影回 draggable）、P2-07（固定/粘贴命令化）、P3-06（导入校验）。
 - 身份与画布归属按现有 ID 保留。新 ID 用 UUID，不以数组位置、标题或 DOM key 做持久身份。
 
 ## C2 命令、回执、错误和幂等
