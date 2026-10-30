@@ -22,6 +22,11 @@ import { ModelPicker } from "./model-picker";
 import { FloatingAgent } from "./floating-agent";
 import type { AgentState, AgentSettings, Attachment } from "@/lib/agent/schema";
 import { finalizeInterruptedMessages } from "@/lib/agent/messages";
+import { bridgeToolPart, previewStore } from "@/lib/canvas-runtime/preview-store";
+import { createScheduler } from "@/lib/canvas-runtime/scheduler";
+
+/** 预显示更新的有界调度器：同一工具条目只保留最新一次，终态立即执行（P2-09）。 */
+const previewScheduler = createScheduler();
 async function request(url: string, init?: RequestInit) {
   const r = await fetch(url, {
     ...init,
@@ -237,6 +242,18 @@ function Chat({
   });
   const busy = status === "streaming" || status === "submitted",
     disabled = switching || uploading;
+  // 只读预显示：只桥接正在进行的最后一条回复里已确认的工具输入/结果；结束后清掉没有交接正式节点的条目。
+  const canvasId = state.canvasId;
+  useEffect(() => {
+    const last = messages.at(-1);
+    if (!last || last.role !== "assistant") return;
+    for (const part of last.parts) if (part.type.startsWith("tool-")) bridgeToolPart(previewStore, canvasId, part as ToolUIPart, previewScheduler);
+    if (!busy) {
+      previewScheduler.cancelPrefix(`${canvasId}:`);
+      for (const entry of previewStore.get(canvasId)) if (!entry.nodeId) previewStore.remove(canvasId, entry.toolCallId, entry.itemIndex);
+    }
+  }, [messages, busy, canvasId]);
+  useEffect(() => () => { previewScheduler.cancelPrefix(`${canvasId}:`); previewStore.clearCanvas(canvasId); }, [canvasId]);
   useEffect(() => {
     onBusy(busy);
     return () => {};

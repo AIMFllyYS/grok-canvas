@@ -40,6 +40,7 @@ import { openOutbox, type PostResult } from "@/lib/canvas-runtime/outbox";
 import type { HistoryEntry } from "@/lib/canvas-runtime/history";
 import type { CanvasCommand, Geometry } from "@/lib/canvas-runtime/types";
 import { CanvasScene } from "./canvas-scene";
+import { CanvasPreview } from "./canvas-preview";
 import { type CanvasOperation } from "@/lib/canvas-operations";
 import { generationClaim } from "@/lib/generation-claim-client";
 import { canvasDraftKey, clearCanvasDraft, loadCanvasDraft, loadGeometryCheckpoints, saveGeometryCheckpoint } from "@/lib/canvas-drafts";
@@ -2195,6 +2196,7 @@ export function FlowCanvas({
           proOptions={{ hideAttribution: true }}
         >
           <Background variant={BackgroundVariant.Dots} gap={24} size={1} />
+          <CanvasPreview canvasId={doc.id} />
           <PromptPanel />
           <CandidatePanel />
         </CanvasScene>
