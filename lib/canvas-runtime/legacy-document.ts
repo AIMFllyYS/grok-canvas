@@ -47,6 +47,73 @@ export function deriveDocumentId(nodeId: string): string {
   return direct.length <= MAX_ID ? direct : `doc_${nodeId.slice(0, 100)}_${fnv1a(nodeId)}`;
 }
 
+export type LegacyNodeConversion = {
+  summary: NodeSummary;
+  /** 仅 canvasText：拆出的正文。 */
+  content: string | null;
+  explicitSize: boolean;
+  issues: LegacyConversionIssue[];
+};
+
+/**
+ * 单个旧节点 → NodeSummary（版本为 0，调用方可覆盖）。几何无效时返回 null 并写入 issues。
+ * JSON 兼容仓库按需逐个转换，避免为一条命令转换全图。
+ */
+export function convertLegacyNode(raw: Record<string, unknown>, canvasId: string, documentId?: string): LegacyNodeConversion | { summary: null; issues: LegacyConversionIssue[] } {
+  const issues: LegacyConversionIssue[] = [];
+  const id = String(raw.id);
+  const report = (code: LegacyConversionIssue["code"], detail: string) => issues.push({ entity: "node", id, code, detail });
+  const type = typeof raw.type === "string" ? raw.type : "";
+  const entry = getNodeType(type);
+  if (!entry) report("unknown_type", `未知节点类型：${type || "(空)"}`);
+  for (const key of Object.keys(raw)) if (!NODE_FIELDS.has(key)) report("unknown_field", `节点顶层字段 ${key} 未登记，导出时不保留`);
+  const position = isRecord(raw.position) ? raw.position : {};
+  const measured = isRecord(raw.measured) ? raw.measured : {};
+  const fallback = entry?.defaultSize ?? NODE_REGISTRY.image.defaultSize;
+  const explicitSize = finite(raw.width) || finite(raw.height);
+  const geometry = {
+    x: position.x as number,
+    y: position.y as number,
+    width: finite(raw.width) ? raw.width : finite(measured.width) && measured.width > 0 ? measured.width : fallback.width,
+    height: finite(raw.height) ? raw.height : finite(measured.height) && measured.height > 0 ? measured.height : fallback.height,
+  };
+  if (![geometry.x, geometry.y].every(finite) || geometry.width <= 0 || geometry.height <= 0) {
+    report("invalid_geometry", "节点位置或尺寸无效，未导入");
+    return { summary: null, issues };
+  }
+  const sourceData = isRecord(raw.data) ? raw.data : {};
+  if (!isRecord(raw.data)) report("invalid_value", "节点 data 不是对象");
+  const { content, ...rest } = sourceData;
+  const hasDocument = entry?.hasDocument ?? false;
+  const data: Record<string, unknown> = hasDocument ? rest : { ...sourceData };
+  if (raw.draggable === false) data.pinned = true;
+  if (hasDocument && content !== undefined && typeof content !== "string") report("invalid_value", "正文不是字符串，已按空正文导入");
+  if (entry) for (const issue of checkNodeData(type, data)) report(issue.message.includes("未登记") ? "unknown_field" : "invalid_value", issue.message);
+  const summary: NodeSummary = {
+    id, canvasId, type, schemaVersion: entry?.schemaVersion ?? 1, geometry, entityVersion: 0, geometryVersion: 0,
+    documentId: hasDocument ? documentId ?? deriveDocumentId(id) : null, data,
+  };
+  return { summary, content: hasDocument ? (typeof content === "string" ? content : "") : null, explicitSize, issues };
+}
+
+/**
+ * NodeSummary → 旧节点。original 存在时保留其视图字段（measured 等），只覆盖业务字段；
+ * 媒体节点没有显式尺寸且尺寸未变时不写 width/height。
+ */
+export function exportLegacyNode(node: NodeSummary, options: { content?: string | null; explicitSize: boolean; original?: Record<string, unknown> }): Record<string, unknown> {
+  const { pinned, ...data } = node.data as Record<string, unknown>;
+  const out: Record<string, unknown> = options.original ? { ...options.original } : {};
+  out.id = node.id;
+  out.type = node.type;
+  out.position = { x: node.geometry.x, y: node.geometry.y };
+  if (options.explicitSize || getNodeType(node.type)?.hasDocument) { out.width = node.geometry.width; out.height = node.geometry.height; }
+  else { delete out.width; delete out.height; }
+  if (pinned === true) out.draggable = false;
+  else delete out.draggable;
+  out.data = node.documentId ? { ...structuredClone(data), content: options.content ?? "" } : structuredClone(data);
+  return out;
+}
+
 export function fromCanvasDoc(doc: LegacyCanvasDocV1, options: { documentIds?: ReadonlyMap<string, string> } = {}): LegacyConversion {
   const issues: LegacyConversionIssue[] = [];
   const nodes: NodeSummary[] = [];
@@ -62,44 +129,18 @@ export function fromCanvasDoc(doc: LegacyCanvasDocV1, options: { documentIds?: R
     const id = raw.id;
     if (seen.has(id)) { report("node", id, "duplicate_id", "节点 ID 重复，保留首个"); continue; }
     seen.add(id);
-    const type = typeof raw.type === "string" ? raw.type : "";
-    const entry = getNodeType(type);
-    if (!entry) report("node", id, "unknown_type", `未知节点类型：${type || "(空)"}`);
-    for (const key of Object.keys(raw)) if (!NODE_FIELDS.has(key)) report("node", id, "unknown_field", `节点顶层字段 ${key} 未登记，导出时不保留`);
-
-    const position = isRecord(raw.position) ? raw.position : {};
-    const measured = isRecord(raw.measured) ? raw.measured : {};
-    const fallback = entry?.defaultSize ?? NODE_REGISTRY.image.defaultSize;
-    const explicit = finite(raw.width) || finite(raw.height);
-    const geometry = {
-      x: position.x as number,
-      y: position.y as number,
-      width: finite(raw.width) ? raw.width : finite(measured.width) && measured.width > 0 ? measured.width : fallback.width,
-      height: finite(raw.height) ? raw.height : finite(measured.height) && measured.height > 0 ? measured.height : fallback.height,
-    };
-    if (![geometry.x, geometry.y].every(finite) || geometry.width <= 0 || geometry.height <= 0) { report("node", id, "invalid_geometry", "节点位置或尺寸无效，未导入"); continue; }
-    if (explicit) explicitSizeNodeIds.push(id);
-
-    const sourceData = isRecord(raw.data) ? raw.data : {};
-    if (!isRecord(raw.data)) report("node", id, "invalid_value", "节点 data 不是对象");
-    const { content, ...rest } = sourceData;
-    const hasDocument = entry?.hasDocument ?? false;
-    const data: Record<string, unknown> = hasDocument ? rest : { ...sourceData };
-    if (raw.draggable === false) data.pinned = true;
-    let documentId: string | null = null;
-    if (hasDocument) {
-      documentId = options.documentIds?.get(id) ?? deriveDocumentId(id);
-      documentIds.set(id, documentId);
-      documents.push({ id: documentId, nodeId: id, content: typeof content === "string" ? content : "", version: 0 });
-      if (content !== undefined && typeof content !== "string") report("node", id, "invalid_value", "正文不是字符串，已按空正文导入");
+    const hasDocument = getNodeType(typeof raw.type === "string" ? raw.type : "")?.hasDocument ?? false;
+    const documentId = hasDocument ? options.documentIds?.get(id) ?? deriveDocumentId(id) : undefined;
+    const converted = convertLegacyNode(raw, doc.id, documentId);
+    issues.push(...converted.issues);
+    if (!converted.summary) continue;
+    const { summary } = converted as LegacyNodeConversion;
+    if (summary.documentId) {
+      documentIds.set(id, summary.documentId);
+      documents.push({ id: summary.documentId, nodeId: id, content: (converted as LegacyNodeConversion).content ?? "", version: 0 });
     }
-    if (entry) {
-      for (const issue of checkNodeData(type, data)) {
-        const unknown = issue.message.includes("未登记");
-        report("node", id, unknown ? "unknown_field" : "invalid_value", issue.message);
-      }
-    }
-    nodes.push({ id, canvasId: doc.id, type, schemaVersion: entry?.schemaVersion ?? 1, geometry, entityVersion: 0, geometryVersion: 0, documentId, data });
+    if ((converted as LegacyNodeConversion).explicitSize) explicitSizeNodeIds.push(id);
+    nodes.push(summary);
   }
 
   const edgeSeen = new Set<string>();
@@ -135,18 +176,10 @@ export function fromCanvasDoc(doc: LegacyCanvasDocV1, options: { documentIds?: R
 export function toCanvasDoc(snapshot: StoreSnapshot, meta: LegacyCanvasMeta): LegacyCanvasDocV1 {
   const explicit = new Set(meta.explicitSizeNodeIds);
   const contentByDocument = new Map(snapshot.documents.map(record => [record.id, record.content]));
-  const nodes = snapshot.nodes.map(node => {
-    const { pinned, ...data } = node.data as Record<string, unknown>;
-    const out: Record<string, unknown> = {
-      id: node.id,
-      type: node.type,
-      position: { x: node.geometry.x, y: node.geometry.y },
-    };
-    if (explicit.has(node.id) || getNodeType(node.type)?.hasDocument) { out.width = node.geometry.width; out.height = node.geometry.height; }
-    if (pinned === true) out.draggable = false;
-    out.data = node.documentId ? { ...structuredClone(data), content: contentByDocument.get(node.documentId) ?? "" } : structuredClone(data);
-    return out;
-  });
+  const nodes = snapshot.nodes.map(node => exportLegacyNode(node, {
+    explicitSize: explicit.has(node.id),
+    content: node.documentId ? contentByDocument.get(node.documentId) ?? "" : null,
+  }));
   const edges = snapshot.edges.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, type: "scissor", data: edge.role ? { role: edge.role } : {} }));
   return { ...structuredClone(meta.doc), id: snapshot.canvasId, name: snapshot.name, revision: snapshot.revision, nodes, edges };
 }

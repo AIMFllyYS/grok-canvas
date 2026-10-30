@@ -1,4 +1,4 @@
-import { loadCanvas, updateCanvas, type CanvasDoc } from "../canvas-store";
+import { loadCanvas, publicCanvas, updateCanvas, type CanvasDoc } from "../canvas-store";
 import { createReferenceIndex, resolveCanvasReferences } from "../canvas-references";
 import { createPlacementIndex, placeNewNode } from "../node-placement";
 import { AgentError } from "./store";
@@ -25,7 +25,8 @@ export type CanvasEdge = {
 export async function readCanvas(id: string) {
   const c = await loadCanvas(id);
   if (!c) throw new AgentError("画布不存在", 404);
-  return c;
+  // 命令元数据只属于服务端，不交给模型或工具结果。
+  return publicCanvas(c);
 }
 export async function mutateCanvas(id: string, edit: (doc: CanvasDoc) => void) {
   const saved = await updateCanvas(id, (doc) => {
@@ -38,7 +39,7 @@ export async function mutateCanvas(id: string, edit: (doc: CanvasDoc) => void) {
     }
   });
   if (!saved) throw new AgentError("画布不存在", 404);
-  return saved;
+  return publicCanvas(saved);
 }
 export function addNodes(
   c: CanvasDoc,

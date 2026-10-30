@@ -3,6 +3,7 @@ import path from "node:path";
 import { dataDir } from "./data-dir";
 import { collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets, type CanvasLibraryAsset } from "./canvas-library";
 import { cleanCanvas } from "./canvas-cleanup";
+import { bumpVersionsForLegacyWrite, type CanvasCommandState } from "./canvas-runtime/command-state";
 
 const DATA_DIR = dataDir();
 const CANVASES_DIR = path.join(DATA_DIR, "canvases");
@@ -74,7 +75,18 @@ export type CanvasDoc = {
   /** Durable operation IDs allow safe retry after a lost response. */
   appliedOperationIds?: string[];
   generationClaims?: Record<string, { id: string; state: "pending" | "unknown"; taskId?: string }>;
+  /**
+   * JSON 兼容阶段的命令元数据（字段版本、回执、actor 水位、墓碑）。只由服务端命令仓库写入；
+   * 客户端整份保存带来的值一律忽略。对外输出前用 publicCanvas 去掉。
+   */
+  commandState?: CanvasCommandState;
 };
+
+/** 对外（HTTP/Agent 工具）输出的画布：不含服务端命令元数据，保持旧响应形状。 */
+export function publicCanvas<T extends CanvasDoc | Omit<CanvasDoc, "revision" | "updatedAt">>(doc: T): Omit<T, "commandState"> {
+  const { commandState: _state, ...rest } = doc;
+  return rest;
+}
 
 export function isSafeCanvasId(id: string): boolean {
   return SAFE_ID.test(id);
@@ -134,12 +146,28 @@ export async function saveCanvas(
   });
 }
 
-async function writeCanvas(doc: Omit<CanvasDoc, "revision" | "updatedAt">, current: CanvasDoc | null, revision: number): Promise<CanvasDoc> {
+type WriteMode = { command: boolean; bumpRevision: boolean };
+const LEGACY_WRITE: WriteMode = { command: false, bumpRevision: true };
+
+async function writeCanvas(doc: Omit<CanvasDoc, "revision" | "updatedAt">, current: CanvasDoc | null, revision: number, mode: WriteMode = LEGACY_WRITE): Promise<CanvasDoc> {
   let libraryAssets = mergeLibraryAssets(normalizeLibraryAssets(current?.libraryAssets), normalizeLibraryAssets(doc.libraryAssets));
   libraryAssets = mergeLibraryAssets(libraryAssets, collectCanvasAssets(doc.nodes, doc.createdAt, libraryAssets));
   const appliedOperationIds = [...new Set([...(current?.appliedOperationIds ?? []), ...(doc.appliedOperationIds ?? [])])];
   const generationClaims = doc.generationClaims ?? current?.generationClaims;
-  const next: CanvasDoc = { ...doc, ...(generationClaims ? { generationClaims } : {}), ...(appliedOperationIds.length ? { appliedOperationIds } : {}), libraryAssets, revision: revision + 1, updatedAt: new Date().toISOString() };
+  // 命令元数据只信任命令仓库；旧路径写入沿用服务端当前值，并按差异递增受影响字段的版本。
+  const { commandState: incomingState, ...body } = doc;
+  const commandState = mode.command
+    ? incomingState
+    : current?.commandState && bumpVersionsForLegacyWrite(current.commandState, current, { ...body, revision, updatedAt: current.updatedAt } as CanvasDoc);
+  const next: CanvasDoc = {
+    ...body,
+    ...(generationClaims ? { generationClaims } : {}),
+    ...(appliedOperationIds.length ? { appliedOperationIds } : {}),
+    ...(commandState ? { commandState } : {}),
+    libraryAssets,
+    revision: mode.bumpRevision ? revision + 1 : revision,
+    updatedAt: mode.bumpRevision || !current ? new Date().toISOString() : current.updatedAt,
+  };
   const file = canvasPath(doc.id);
   await mkdir(CANVASES_DIR, { recursive: true });
   const tmp = `${file}.${crypto.randomUUID()}.tmp`;
@@ -168,6 +196,24 @@ export async function transformCanvas(id: string, edit: (doc: CanvasDoc) => Canv
     if (next === current) return current;
     if (next.id !== id) throw new Error("命令不能更改画布 ID");
     return writeCanvas(next, current, current.revision);
+  });
+}
+
+/**
+ * 领域命令仓库的写入口：与其他写入共用画布锁，原子整文件写。
+ * edit 返回 next=null 表示无需写盘（重放/只读）；bumpRevision=false 用于空变更或拒绝记录，
+ * 只持久化 commandState，不改变对外可见的 revision。画布不存在或已删除时返回 null。
+ */
+export async function commitCommandWrite<T>(id: string, edit: (doc: CanvasDoc) => { next: CanvasDoc | null; bumpRevision: boolean; result: T }): Promise<{ saved: CanvasDoc; result: T } | null> {
+  return withCanvasLock(id, async () => {
+    if (deletedIds.has(id)) return null;
+    const current = await loadCanvas(id);
+    if (!current) return null;
+    const { next, bumpRevision, result } = edit(current);
+    if (!next) return { saved: current, result };
+    if (next.id !== id) throw new Error("命令不能更改画布 ID");
+    const saved = await writeCanvas(next, current, current.revision, { command: true, bumpRevision });
+    return { saved, result };
   });
 }
 

@@ -1,0 +1,42 @@
+{
+  "taskId": "P2-03",
+  "sourceCommit": "f2de5b6eec0823ae67dacc4f2ddbda783060395f",
+  "status": "passed",
+  "baseCommit": "3c879137",
+  "red": {
+    "command": "node --test tests/canvas-commands.test.mjs",
+    "exitCode": 1,
+    "assertion": "放入桩模块（command-service/json-repository 抛“未实现”，commands 路由不存在）后，17 项全部失败：13 项 Error: 未实现；2 项 unexpected Error: 未实现（期望 CommandError）；1 项“commands 路由存在”断言失败；1 项流式读取测试 validation function 返回 false；另有 test:commands 未登记新测试。"
+  },
+  "checks": [
+    {"command": "node --test tests/canvas-commands.test.mjs tests/canvas-route.test.mjs tests/canvas-operations.test.mjs", "exitCode": 0, "evidence": "本地 35/35（新增命令测试 17 项，旧路由与旧 operations 套件不变）"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "本地无错误；PR CI 三矩阵复跑"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "本地 9 个套件共 307 项全过（commands 套件 52 = 19 + 16 + 17）；agent 套件 10 项在 readCanvas/mutateCanvas 改为 publicCanvas 后仍通过"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "新增路由 ƒ /api/canvases/[id]/commands；tsconfig.json 的 include 副作用已还原"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "behaviour": {
+    "idempotency": "同 commandId 且同 sha256(canonicalCommand)：返回原回执（replayed=true），不写盘；重新加载 command-service 模块后仍然幂等。hash 不同：409 command_id_reused，内容不变",
+    "actorSeq": "只接受 accepted+1；序号重复或缺口返回 409 actor_sequence_gap。确定性拒绝（field_conflict / 语义 invalid_command）会记录拒绝结果并占用序号，重试得到同样的错误；解析、权限、stale_epoch、canvas_deleted 不占用序号",
+    "revision": "有实际变化时 revision 和 eventSeq 各 +1，回执里的 revision 与落盘一致；空变更（含值未变的 patch、重复登记相同素材）只记录回执，不递增",
+    "receiptSize": "10000 节点画布只移动带约 100KB 正文的 node-0：回执只含 node-0，documents 为空，不含正文，JSON 小于 4KB",
+    "atomicity": "batch 中第 3 项失败时，前面的 move 和新增连线都不生效，revision 不变",
+    "tombstones": "删除节点会级联删除正文和入/出边并写入墓碑；之后同 ID 的 add/patch 返回 409",
+    "legacyWriters": "旧写入路径（整份 PUT、旧 operations、Agent mutateCanvas，都经过 writeCanvas）按 diffCanvasOperations 递增受影响字段的版本；客户端整份保存带来的 commandState 被忽略",
+    "http": "POST /api/canvases/[id]/commands：流式计数，超过 4MiB 立即 413（不信任 Content-Length）；正文超过 100000 字符 413；非 JSON 400；路径与命令 canvasId 不一致 400；apply_generation 400；画布不存在 404 canvas_deleted；字段冲突 409；错误结构 {error:{code,message,fields?}}"
+  },
+  "compatibility": [
+    "GET/PUT 画布、旧 operations 响应和 Agent readCanvas/mutateCanvas 均通过 publicCanvas 去掉 commandState，旧响应形状不变，也不会把命令元数据交给模型",
+    "旧 operations 接口保留，仅作兼容；正常调用今后走 commands"
+  ],
+  "manual": {"status": "not-required", "evidence": "manifest P2-03 manual=false；服务端模块与路由，没有 UI 交互"},
+  "act": "红灯后实现。首轮绿灯检查发现素材重复登记会被当成变化，已改为在提交前剔除与已登记值相同的条目，并补测试。随后有 1 项失败：测试 helper 给权限阶段被拒的命令也分配了序号，造成下一条命令出现缺口；改为复用该序号，并在断言中写明“解析/权限阶段被拒不占用序号”的语义。之后全量复验通过。交接：P2-04 在 reducer/仓库上加几何租约与字段版本撤销；P2-05 的 outbox 直接发送 CanvasCommand 到 commands 路由，并用 loadEntitySnapshot 的版本作为 expectedVersion。",
+  "risks": [
+    "JSON adapter 临时限制：每条命令都整文件读写 CanvasDoc（O(N) IO），P3-05 的 SQL adapter 解决",
+    "commandState 中的回执、拒绝记录和墓碑会持续增长，这里没有压缩；P3-10 负责水位、保留与背压",
+    "旧写入路径落盘时多一次 O(N) 的 diff（仅对已有 commandState 的画布）",
+    "媒体节点几何依赖 measured；只改 measured 的旧写入不递增 geometryVersion，但 move 的 from 比较会报冲突，属于保守失败"
+  ],
+  "next": "P2-04"
+}

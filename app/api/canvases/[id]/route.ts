@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isLibraryAsset } from "@/lib/canvas-library";
-import { deleteCanvas, isSafeCanvasId, saveCanvas, saveLastCanvasId, type CanvasDoc } from "@/lib/canvas-store";
+import { deleteCanvas, isSafeCanvasId, publicCanvas, saveCanvas, saveLastCanvasId, type CanvasDoc } from "@/lib/canvas-store";
 import { agentBusy } from "@/lib/agent/store";
 import { recoverStaleGenerationClaims } from "@/lib/generation-claims";
 
@@ -22,7 +22,7 @@ export async function GET(request: Request, context: Params) {
   if (params.get("background") !== "1") await saveLastCanvasId(id);
   const revision = params.get("sinceRevision");
   if (revision !== null && /^\d+$/.test(revision) && Number(revision) === doc.revision) return new Response(null, { status: 304, headers: { "Cache-Control": "no-store" } });
-  return NextResponse.json(doc, { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json(publicCanvas(doc), { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function PUT(request: Request, context: Params) {
@@ -61,7 +61,7 @@ export async function PUT(request: Request, context: Params) {
       { status: 409 },
     );
   }
-  return NextResponse.json(saved);
+  return NextResponse.json(publicCanvas(saved));
 }
 
 export async function DELETE(_request: Request, context: Params) {

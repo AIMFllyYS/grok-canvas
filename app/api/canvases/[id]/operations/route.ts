@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { applyCanvasOperations, CanvasOperationConflict, type CanvasOperation } from "@/lib/canvas-operations";
-import { isSafeCanvasId, transformCanvas } from "@/lib/canvas-store";
+import { isSafeCanvasId, publicCanvas, transformCanvas } from "@/lib/canvas-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,7 +28,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   try {
     const saved = await transformCanvas(id, doc => applyCanvasOperations(doc, operations));
     if (!saved) return NextResponse.json({ error: { kind: "not_found", message: "画布不存在" } }, { status: 404 });
-    return NextResponse.json(saved);
+    return NextResponse.json(publicCanvas(saved));
   } catch (error) {
     if (error instanceof CanvasOperationConflict) {
       const conflict = operations.find(op => op.id === error.operationId);
