@@ -79,7 +79,12 @@ test("两个路由模块实例同时调用只启动一个 Worker", async () => {
 
 test("容量：超过队列条数返回 queue_full，单请求超过 4MiB 被拒，超时请求被清理", async () => {
   const db = open({ limits: { queueItems: 3, interactiveTimeoutMs: 1500 } });
-  await command(db, "test.createSchema");
+  // 首个请求同时承担 Worker 冷启动（加载 native、打开库）；繁忙的 Windows CI 机上可能超过 1500ms。
+  // createSchema 幂等，超时只重试预热，后面的容量断言保持原样。
+  for (let attempt = 1; ; attempt++) {
+    try { await command(db, "test.createSchema"); break; }
+    catch (error) { if (error.code !== "timeout" || attempt === 3) throw error; }
+  }
   const blocking = query(db, "test.block", { ms: 3000 });
   const queued = [query(db, "test.count", { table: "t_parent" }), query(db, "test.count", { table: "t_parent" })];
   await rejectsCode(query(db, "test.count", { table: "t_parent" }), "queue_full");
