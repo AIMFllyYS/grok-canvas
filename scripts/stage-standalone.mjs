@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkStandalone, currentBuildDir } from "./build-root.mjs";
 import { stageDbRuntime } from "./db-runtime.mjs";
+import { stageMediaRuntime } from "./media-runtime.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const buildDir = currentBuildDir(root);
@@ -23,4 +24,5 @@ if (existsSync(path.join(root, "public"))) await cp(path.join(root, "public"), p
 await cp(build.staticDir, staticOut, { recursive: true });
 
 const manifest = await stageDbRuntime({ projectRoot: root, destination: path.join(build.standalone, "db-runtime") });
-console.log(`Staged standalone ${build.distDir} (BUILD_ID ${build.buildId}); db-runtime ${manifest.driver}@${manifest.driverVersion} ${manifest.target}, ${manifest.files.length} files`);
+const media = await stageMediaRuntime({ projectRoot: root, destination: path.join(build.standalone, "media-runtime") });
+console.log(`Staged standalone ${build.distDir} (BUILD_ID ${build.buildId}); db-runtime ${manifest.driver}@${manifest.driverVersion} ${manifest.target}, ${manifest.files.length} files; media-runtime sharp@${media.version} ${media.target}`);
