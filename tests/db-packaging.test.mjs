@@ -252,6 +252,11 @@ test("包审计：包内链接允许，指向包外的链接报错", async () =>
   await symlink(outside, path.join(pkg, "node_modules", "escape"), kind);
   const bad = await dbRuntime.auditPackage(pkg, { projectRoot: root });
   assert.deepEqual(bad.forbidden, [{ path: "node_modules/escape", reason: "链接指向包外" }]);
+  // 包根本身经别名路径访问（Windows 8.3 短名 / 符号链接目录）时，包内链接仍算包内。
+  const alias = path.join(scratch, "audit-alias");
+  await symlink(pkg, alias, kind);
+  const viaAlias = await dbRuntime.auditPackage(alias, { projectRoot: root });
+  assert.deepEqual(viaAlias.forbidden, [{ path: "node_modules/escape", reason: "链接指向包外" }]);
 });
 
 test("desktop runtime：读取 desktop-runtime.json 的 distDir 与 worker，并注入服务环境", async () => {

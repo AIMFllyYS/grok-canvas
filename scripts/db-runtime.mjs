@@ -128,7 +128,8 @@ export async function auditPackage(dir, { projectRoot, home = os.homedir() }) {
   const links = [];
   const files = await walk(dir, dir, links);
   const forbidden = [];
-  const packageRoot = path.resolve(dir);
+  // 包根也要 realpath：Windows 上 tmpdir 可能是 8.3 短名（RUNNER~1），而 realpath 返回长名。
+  const packageRoot = await realpath(path.resolve(dir));
   for (const link of links) {
     // 链接只能指向包内；指向仓库或用户目录意味着包离开构建机就会坏，或把外部内容带进来。
     const resolved = await realpath(path.join(dir, link)).catch(() => null);
