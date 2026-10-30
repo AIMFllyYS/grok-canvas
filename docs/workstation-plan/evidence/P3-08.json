@@ -21,7 +21,7 @@
   ],
   "manual": {
     "status": "passed",
-    "evidence": "由我在隔离数据目录（scratch 临时目录，非用户真实数据）用浏览器实测：standalone 产物以 JSON 权威启动 → 新建画布写 3 个文本节点 → 浏览器拖动 d1（geometryVersion 0→1）→ 停服务 → `workstation-cutover.mjs` preflight 正确报 clients 阻断 → `--execute --clients-drained` 提交（备份 complete，纪元 sqlite-2c0bab3a589d）→ 同目录重启 → 浏览器加载 3 个节点，纪元 json-v1→sqlite-…，d1 位置保留、revision 延续、正文来自 documents → 拖动 d2 经命令保存（geometryVersion 0→1）→ 刷新后位置 (450,0)→(333,215) 保留 → 旧纪元命令 409 stale_epoch → 无 5xx、无页面错误 → 旧 JSON 3 个文件 hash 前后一致 → `--rollback` 被拒绝。结果 JSON 与截图：docs/workstation-plan/evidence/P3-08-drill/（json 5/5，sqlite 11/11）。首轮演练发现 /entities 仍读旧 JSON 的 commandState（客户端拿到 json-v1 纪元，拖动被 stale_epoch 拒绝），已修为 SQLite 快照并补单测后复测通过。"
+    "evidence": "由我在隔离数据目录（scratch 临时目录，非用户真实数据）用浏览器实测：standalone 产物以 JSON 权威启动 → 新建画布写 3 个文本节点 → 浏览器拖动 d1（geometryVersion 0→1）→ 停服务 → `workstation-cutover.mjs` preflight 正确报 clients 阻断 → `--execute --clients-drained` 提交（备份 complete，纪元 sqlite-2c0bab3a589d）→ 同目录重启 → 浏览器加载 3 个节点，纪元 json-v1→sqlite-…，d1 位置保留、revision 延续、正文来自 documents → 拖动 d2 经命令保存（geometryVersion 0→1）→ 刷新后位置 (450,0)→(333,215) 保留 → 旧纪元命令 409 stale_epoch → 无 5xx、无页面错误 → 旧 JSON 3 个文件 hash 前后一致 → `--rollback` 被拒绝。结果 JSON：docs/workstation-plan/evidence/P3-08-drill/（json 5/5，sqlite 11/11）；截图未入库（standalone 产物审计禁止仓库内媒体文件被追踪进产物），由我在本机查看确认 3 个节点位置与正文正确。首轮演练发现 /entities 仍读旧 JSON 的 commandState（客户端拿到 json-v1 纪元，拖动被 stale_epoch 拒绝），已修为 SQLite 快照并补单测后复测通过。"
   },
   "entrypoints": {
     "canvas-store": "loadCanvas/saveCanvas/updateCanvas/transformCanvas/listCanvases/createCanvas/deleteCanvas/load·saveLastCanvasId → SQLite（Worker）；commitCommandWrite/writeCanvas/writeLastCanvasId/deleteCanvas 的 JSON 分支由 assertJsonWritable 守卫",
