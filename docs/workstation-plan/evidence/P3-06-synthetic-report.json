@@ -1,0 +1,232 @@
+{
+  "generatedBy": "scripts/workstation-migrate.mjs on a synthetic temp directory (no user data)",
+  "dryRun": {
+    "exitCode": 0,
+    "output": {
+      "mode": "dry-run",
+      "sourceDigest": "7285251c26ec8ac750e68d2c50fec82dac6da1a2585ac7ba38aaf9afa4de3183",
+      "counts": {
+        "agent": 1,
+        "app-state": 1,
+        "asset": 1,
+        "auth": 1,
+        "canvas": 2,
+        "video-task": 1
+      },
+      "units": 6,
+      "excluded": [
+        "auth.json"
+      ],
+      "unknown": []
+    }
+  },
+  "interruptedRun": {
+    "code": "interrupted",
+    "message": "模拟中断：已完成 2/6 个单元"
+  },
+  "resumedRun": {
+    "exitCode": 0,
+    "summary": {
+      "status": "ready_to_switch",
+      "blocking": [],
+      "missingMedia": 1
+    }
+  },
+  "report": {
+    "version": 1,
+    "runId": "import-7285251c26ec8ac7",
+    "sourceDigest": "7285251c26ec8ac750e68d2c50fec82dac6da1a2585ac7ba38aaf9afa4de3183",
+    "status": "ready_to_switch",
+    "files": {
+      "assets/shared.png": {
+        "outcome": "ok",
+        "tables": {
+          "assets": 1
+        }
+      },
+      "canvases/syn-a.json": {
+        "outcome": "ok",
+        "tables": {
+          "canvases": 1,
+          "nodes": 2,
+          "documents": 1,
+          "edges": 0,
+          "canvas_assets": 1,
+          "command_receipts": 0,
+          "actor_watermarks": 0,
+          "legacy_operation_ids": 2,
+          "generation_claims": 1
+        },
+        "warnings": []
+      },
+      "canvases/syn-b.json": {
+        "outcome": "ok",
+        "tables": {
+          "canvases": 1,
+          "nodes": 1,
+          "documents": 0,
+          "edges": 0,
+          "canvas_assets": 0,
+          "command_receipts": 0,
+          "actor_watermarks": 0,
+          "legacy_operation_ids": 0,
+          "generation_claims": 0
+        },
+        "warnings": []
+      },
+      "agent/syn-b.json": {
+        "outcome": "ok",
+        "tables": {
+          "agent_conversations": 1,
+          "agent_messages": 60
+        }
+      },
+      "video-tasks/task-s.json": {
+        "outcome": "ok",
+        "tables": {
+          "task_runs": 1
+        }
+      },
+      "app-state.json": {
+        "outcome": "ok",
+        "tables": {
+          "workspace_preferences": 1
+        }
+      }
+    },
+    "blocking": [],
+    "missingMedia": [
+      {
+        "assetName": "gone.png",
+        "referencedBy": "syn-a/a1"
+      }
+    ],
+    "expectations": {
+      "canvases": {
+        "syn-a": {
+          "revision": 3,
+          "nodes": 2,
+          "documents": 1,
+          "edges": 0,
+          "nodesHash": "177e027a8a85c8218010d1d66f5dfc4d1aa1e646d8d4393bcdffd6b531c35c96",
+          "operationIds": 2,
+          "claims": 1,
+          "receipts": 0,
+          "actors": 0
+        },
+        "syn-b": {
+          "revision": 3,
+          "nodes": 1,
+          "documents": 0,
+          "edges": 0,
+          "nodesHash": "04a1fd29a08a1dd68b498b6cc638192bd7a37133faaa723ea21af4f4e65317af",
+          "operationIds": 0,
+          "claims": 0,
+          "receipts": 0,
+          "actors": 0
+        }
+      },
+      "conversations": {
+        "syn-b/legacy-syn-b": {
+          "messages": 60,
+          "idsHash": "6db254ac9722bba5ea0597f7a2800eb58997de8b8d91e0647cafc5761b631651"
+        }
+      },
+      "tasks": [
+        "task-s"
+      ],
+      "generations": {}
+    },
+    "excluded": [
+      "auth.json"
+    ],
+    "unitsDone": 6,
+    "unitsTotal": 6,
+    "validation": {
+      "ok": true,
+      "problems": [],
+      "tables": [
+        {
+          "source": "canvases/syn-a.json",
+          "expected": {
+            "revision": 3,
+            "nodes": 2,
+            "documents": 1,
+            "edges": 0,
+            "nodesHash": "177e027a8a85c8218010d1d66f5dfc4d1aa1e646d8d4393bcdffd6b531c35c96",
+            "operationIds": 2,
+            "claims": 1,
+            "receipts": 0,
+            "actors": 0
+          },
+          "actual": {
+            "revision": 3,
+            "nodes": 2,
+            "documents": 1,
+            "edges": 0,
+            "nodesHash": "177e027a8a85c8218010d1d66f5dfc4d1aa1e646d8d4393bcdffd6b531c35c96",
+            "operationIds": 2,
+            "claims": 1,
+            "receipts": 0,
+            "actors": 0
+          }
+        },
+        {
+          "source": "canvases/syn-b.json",
+          "expected": {
+            "revision": 3,
+            "nodes": 1,
+            "documents": 0,
+            "edges": 0,
+            "nodesHash": "04a1fd29a08a1dd68b498b6cc638192bd7a37133faaa723ea21af4f4e65317af",
+            "operationIds": 0,
+            "claims": 0,
+            "receipts": 0,
+            "actors": 0
+          },
+          "actual": {
+            "revision": 3,
+            "nodes": 1,
+            "documents": 0,
+            "edges": 0,
+            "nodesHash": "04a1fd29a08a1dd68b498b6cc638192bd7a37133faaa723ea21af4f4e65317af",
+            "operationIds": 0,
+            "claims": 0,
+            "receipts": 0,
+            "actors": 0
+          }
+        },
+        {
+          "source": "agent/syn-b.json#legacy-syn-b",
+          "expected": {
+            "messages": 60,
+            "idsHash": "6db254ac9722bba5ea0597f7a2800eb58997de8b8d91e0647cafc5761b631651"
+          },
+          "actual": {
+            "messages": 60,
+            "idsHash": "6db254ac9722bba5ea0597f7a2800eb58997de8b8d91e0647cafc5761b631651"
+          }
+        },
+        {
+          "source": "video-tasks/*.json",
+          "expected": {
+            "task_runs": 1
+          },
+          "actual": {
+            "task_runs": 1
+          }
+        },
+        {
+          "source": "generations/*.json",
+          "expected": {
+            "generation_records": 0
+          },
+          "actual": {
+            "generation_records": 0
+          }
+        }
+      ]
+    },
+    "storageEpoch": "sqlite-7285251c26ec"
+  }
+}

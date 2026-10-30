@@ -1,0 +1,30 @@
+{
+  "taskId": "P3-06",
+  "sourceCommit": "c6a3c2111a710fefa8a55eb6349b6d4b61d147f2",
+  "status": "passed",
+  "baseCommit": "c295ee6b",
+  "red": {
+    "command": "node --test tests/db-import.test.mjs",
+    "exitCode": 1,
+    "assertion": "importer.cjs / import-validator.cjs 为只抛“未实现”的桩、worker.cjs 为基线版本（无 import.status）、CLI 脚本不存在时 5/5 失败。"
+  },
+  "checks": [
+    {"command": "node --test tests/db-import.test.mjs", "exitCode": 0, "evidence": "5/5（合成旧目录 + 临时 staging）：完整导入 ready_to_switch，auth.json 从未打开、源文件 hash 前后相同、不写 storage-state；revision/nameVersion/createdAt、节点 entity/geometry 版本、prompt 字段版本、正文（48 万字）单独 documents 且版本保留；同一 legacy nodeId 在两画布各自保留；共享物理媒体一行 assets、两条不同 created_at 的 canvas_assets；缺媒体 assets.status=missing、canvas_assets.missing=1、报告列出 assetName 与引用节点、节点元数据保留；30 个 legacy operation ID、pending 与 unknown claim（unknown 不允许重新收费生成）、视频任务 requestId/snapshot/claim 与可恢复、生成快照、lastCanvas、activeConversation、actor 水位、旧回执；会话顶层镜像去重、只有顶层时 legacy-<canvas>、工具 parts 原样、120 条消息分页完整；墓碑未导入显式报告。坏结构：非法 JSON、断边、重复 ID、未来 schema、坏视频任务、未登记文件逐一阻断且 status=blocked，坏画布零部分实体。中断两次后续跑与一次导入的各表数量/hash 完全一致，消息 124 条、节点 5 个无重复；源文件变化续跑 source_changed，reset 后重新准备只剩新运行。路径：staging 等于/位于/包含源目录、未指定、相对路径、已有 storage-state 均拒绝；dry-run 不建 staging。CLI 默认 dry-run、无参数退出码 2、显式 --staging 导入；Worker import.status 返回 verified 与 unitsDone=unitsTotal"},
+    {"command": "pnpm test:db", "exitCode": 0, "evidence": "7 个 db 测试文件共 55 项"},
+    {"command": "node scripts/workstation-migrate.mjs (合成目录：dry-run → 中断 → 续跑)", "exitCode": 0, "evidence": "见 docs/workstation-plan/evidence/P3-06-synthetic-report.json：dry-run 退出码 0；第 2 个单元后模拟中断；续跑退出码 0，status ready_to_switch，6/6 单元，missingMedia=[gone.png ← syn-a/a1]"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "合入 P3-07 后 12 个套件共 450 项"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "interruptRetry": "每个导入单元（素材批/生成记录/画布/会话/视频任务/app-state）在一个事务里写入实体并推进 import_runs.cursor 与 report；进程在任意单元之间中断，重跑时重新计算 source digest，相同则从 cursor+1 继续，不同则 source_changed 拒绝（--reset 丢弃 staging 库重新准备）。已 verified/failed 的运行再跑直接返回原报告。",
+  "manual": {"status": "not-required", "evidence": "manifest P3-06 manual=false；全部在临时目录，未对真实用户数据运行"},
+  "act": "首轮两个失败都来自测试夹具：顶层 messages 与会话不一致（真实 ensureConversations 中顶层是当前会话的镜像），改为镜像后通过；legacy-document 依赖 zod，加载时需链接 node_modules。真实数据迁移仍需用户明确授权后运行；不写 storage-state、不建立双写，不关闭 P3-08，不代表 SQLite 已上线。",
+  "risks": [
+    "JSON commandState.tombstones 没有对应节点行，未导入 SQL（报告逐画布列出 tombstonesNotImported）；切换前 P3-08 需决定墓碑 ID 的保留方式，否则切换后旧 ID 可能被重新使用。",
+    "studio/ 旧目录不自动映射，出现时报 not_imported 并阻断“全部成功”；需先由应用迁移到 agent/。",
+    "编辑租约只在进程内存中，JSON 不持久化，没有可导入的租约记录。",
+    "导入的画布使用新的存储纪元 sqlite-<digest>，切换后客户端需要按 stale_epoch 重新同步；事件日志从 0 开始。"
+  ],
+  "next": "P3-08"
+}
