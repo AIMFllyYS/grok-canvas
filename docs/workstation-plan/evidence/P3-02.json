@@ -1,6 +1,6 @@
 {
   "taskId": "P3-02",
-  "sourceCommit": "4f6c531c4d858fb5c3dee8b8064fecc04ffb7c31",
+  "sourceCommit": "9ae9f67471c8696b6a3a5d19d70e59829405b6fe",
   "status": "passed",
   "baseCommit": "b82b4d60",
   "red": {
@@ -28,7 +28,7 @@
     "tracing": "Next/Turbopack 对 outputFileTracingExcludes 用 picomatch contains 匹配，模式在路径任意位置命中。旧列表中 ./.tmp-* 吃掉 .tmp-* 隔离构建自己的全部 server chunk，./build/** 吃掉 161 个 next/dist/build 文件（包括所有 *build* 命名的 distDir 的 chunk），./components/** 吃掉 75 个 next/dist/client/components 文件。改为文件类型或确切文件模式，其他构建目录按名字列出，且从不排除当前 distDir。"
   },
   "manual": {"status": "not-required", "evidence": "manifest P3-02 manual=false；三端都由脚本实测，没有 UI 签收项"},
-  "act": "Check 发现并修正 3 个问题，均已复验：(1) 隔离 distDir 的 standalone 缺全部 server chunk，GET / 500（Cannot find module ../chunks/ssr/[turbopack]_runtime.js）。这是既有问题，protocol.md 规定的隔离构建一直只检查构建退出码，没有运行过 standalone。用无排除构建对照、对 32 个 trace 的 1764 个文件逐模式比对后定位到 contains 匹配，修正后 standalone 有 35 个 chunk、返回 200，并补了回归测试。(2) smoke 第一次得到 403：本机访问守卫按 GROK_CANVAS_PORT 校验 Host，smoke 改为与监听端口一致，并要求 2xx/3xx 才算通过。(3) Windows 下 Next standalone 的 node_modules 是指回仓库 store 的 junction（77 个）：standalone 只在构建机运行，报告里记数，不判失败；分发的 .desktop/app 由 desktop:deps 平铺安装，electron 目标对任何包外链接都判失败（实测 0）。另外修正 driver.nativeBindingPath 的查找顺序，与 better-sqlite3 binding.js 一致（prebuilds 优先）。没有签名，没有发布安装包或 Release，没有迁移用户数据。",
+  "act": "Check 发现并修正 3 个问题，均已复验：(1) 隔离 distDir 的 standalone 缺全部 server chunk，GET / 500（Cannot find module ../chunks/ssr/[turbopack]_runtime.js）。这是既有问题，protocol.md 规定的隔离构建一直只检查构建退出码，没有运行过 standalone。用无排除构建对照、对 32 个 trace 的 1764 个文件逐模式比对后定位到 contains 匹配，修正后 standalone 有 35 个 chunk、返回 200，并补了回归测试。(2) smoke 第一次得到 403：本机访问守卫按 GROK_CANVAS_PORT 校验 Host，smoke 改为与监听端口一致，并要求 2xx/3xx 才算通过。(3) Windows 下 Next standalone 的 node_modules 是指回仓库 store 的 junction（77 个）：standalone 只在构建机运行，报告里记数，不判失败；分发的 .desktop/app 由 desktop:deps 平铺安装，electron 目标对任何包外链接都判失败（实测 0）。另外修正 driver.nativeBindingPath 的查找顺序，与 better-sqlite3 binding.js 一致（prebuilds 优先）。(4) CI 首轮（run 41058849266）Windows 失败 1 项：runner 的 tmpdir 是 8.3 短名，realpath 返回长名，包内链接被误判为包外。包根改为先 realpath，并补了「经别名路径访问包根」的回归断言（旧代码下会失败）。没有签名，没有发布安装包或 Release，没有迁移用户数据。",
   "risks": [
     "Next 把构建机项目路径固化在 standalone 的 server.js / required-server-files.json（outputFileTracingRoot）。审计会先剔除项目路径再查用户目录；这是 Next 的行为，不是用户数据路径。",
     "test.backup 只是 VACUUM INTO 的能力验证，限定在数据库同目录、仅测试 repository 可用；正式备份 op 和进度归 P3-07。",
