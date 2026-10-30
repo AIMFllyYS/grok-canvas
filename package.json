@@ -37,7 +37,7 @@
     "test:video": "node --experimental-strip-types --test tests/video-references.test.mjs tests/video-request.test.mjs tests/video-tasks.test.mjs tests/video-route.test.mjs tests/video-runtime.test.mjs",
     "test:security": "node --experimental-strip-types --test tests/local-access.test.mjs",
     "test:workspace": "node --test tests/workspace-preferences.test.mjs tests/account-display.test.mjs tests/canvas-interaction.test.mjs tests/canvas-performance.test.mjs tests/usage.test.mjs tests/canvas-library.test.mjs tests/canvas-references.test.mjs tests/canvas-store.test.mjs tests/canvas-operations.test.mjs tests/canvas-route.test.mjs tests/canvas-persistence.test.mjs tests/asset-upload.test.mjs tests/prompt-editor.test.mjs tests/asset-drag.test.mjs tests/desktop-runtime.test.mjs tests/desktop-bridge.test.mjs",
-    "test:agent": "node --test tests/agent.test.mjs tests/agent-sdk.test.mjs",
+    "test:agent": "node --test tests/agent.test.mjs tests/agent-sdk.test.mjs tests/agent-canvas-layout.test.mjs",
     "test:commands": "node --test tests/command-schema.test.mjs tests/canvas-entity-store.test.mjs tests/canvas-commands.test.mjs tests/canvas-history-leases.test.mjs tests/canvas-outbox.test.mjs tests/canvas-scene.test.mjs tests/canvas-user-actions.test.mjs tests/generation-commands.test.mjs tests/canvas-scheduler-preview.test.mjs",
     "test:planning": "node --test tests/workstation-plan.test.mjs",
     "test:performance": "node --test tests/performance-metrics.test.mjs",
