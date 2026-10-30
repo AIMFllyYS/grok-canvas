@@ -3,12 +3,12 @@
  * 解析 → 来源权限 → hash 幂等 → storageEpoch → actorSeq → reducer → 仓库同事务提交。
  * 只在服务端使用（node:crypto、文件系统）；浏览器只导入 command-schema。
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { assetPath, isSafeAssetName } from "../assets";
 import { assertClientCommand, canonicalCommand, CommandValidationError, LIMITS, parseCommand } from "./command-schema";
 import { reduceCommand, ReducerError } from "./command-reducer";
-import { jsonCommandRepository, type CommandRepository } from "./json-repository";
+import { jsonCommandRepository, type CommandRepository, type CommandTxn } from "./json-repository";
 import { getLeaseService, isLeaseField, LEASE_FIELDS, type LeaseRef, type LeaseService } from "./lease-service";
 import { COMMAND_ERROR_STATUS, type BatchItem, type CanvasCommand, type CommandErrorBody, type CommandErrorCode, type CommandErrorField, type CommitReceipt } from "./types";
 
@@ -71,48 +71,86 @@ export const commandHash = (command: Parameters<typeof canonicalCommand>[0]) => 
 
 type Outcome = { receipt: CommitReceipt } | { error: CommandError };
 
+/** 锁内执行一条已解析命令：重放、纪元、序号、租约、归约、提交/拒绝记录。 */
+function runInTransaction(txn: CommandTxn, command: CanvasCommand, hash: string, context: CommandContext): Outcome {
+  const meta = { commandId: command.commandId, actorId: command.actorId, actorSeq: command.actorSeq, hash };
+  const leases = context.leases ?? getLeaseService();
+  const stored = txn.storedResult(command.commandId);
+  if (stored) {
+    if (stored.hash !== hash) return { error: new CommandError("command_id_reused", "该 commandId 已用于不同内容的命令") };
+    if (stored.error) return { error: new CommandError(stored.error.code, stored.error.message, { fields: stored.error.fields }) };
+    return { receipt: { ...structuredClone(stored.receipt!), replayed: true } };
+  }
+  if (command.storageEpoch !== txn.storageEpoch) return { error: new CommandError("stale_epoch", `存储纪元已变为 ${txn.storageEpoch}，请重新同步`) };
+  const accepted = txn.acceptedSeq(command.actorId);
+  if (command.actorSeq !== accepted + 1) {
+    return { error: new CommandError("actor_sequence_gap", command.actorSeq <= accepted ? `序号 ${command.actorSeq} 已被使用（已接受到 ${accepted}）` : `序号缺口：期望 ${accepted + 1}，收到 ${command.actorSeq}`) };
+  }
+  // 租约在同一画布锁内核验：他人持有的字段返回 423，属于暂时性冲突，不占用序号。
+  const held = leases.conflicts(command.canvasId, touchedLeaseRefs(command), command.actorId);
+  if (held.length) {
+    return { error: new CommandError("lease_conflict", `${held.length} 个字段正被其他人编辑`, {
+      fields: held.map(lease => ({ path: `node/${lease.nodeId}/${lease.field}`, message: `正被其他人编辑，约 ${Math.max(0, lease.expiresAt - Date.now())}ms 后过期` })),
+      retryAfterMs: Math.max(0, Math.min(...held.map(lease => lease.expiresAt)) - Date.now()),
+    }) };
+  }
+  try {
+    const writes = reduceCommand(txn.reader, command, { assetExists: context.assetExists ?? defaultAssetExists });
+    return { receipt: txn.commit(writes, meta) };
+  } catch (error) {
+    if (!(error instanceof ReducerError)) throw error;
+    txn.reject(meta, { code: error.code, message: error.message, ...(error.fields.length ? { fields: error.fields } : {}) });
+    return { error: new CommandError(error.code, error.message, { fields: error.fields }) };
+  }
+}
+
 export async function executeCommand(input: unknown, context: CommandContext): Promise<CommitReceipt> {
   let outcome: Outcome | null;
   try {
     const command = parseCommand(input);
     if (context.origin === "client") assertClientCommand(command);
     const hash = commandHash(command);
-    const meta = { commandId: command.commandId, actorId: command.actorId, actorSeq: command.actorSeq, hash };
     const repository = context.repository ?? jsonCommandRepository;
-    const leases = context.leases ?? getLeaseService();
-    outcome = await repository.transact<Outcome>(command.canvasId, (txn) => {
-      const stored = txn.storedResult(command.commandId);
-      if (stored) {
-        if (stored.hash !== hash) return { error: new CommandError("command_id_reused", "该 commandId 已用于不同内容的命令") };
-        if (stored.error) return { error: new CommandError(stored.error.code, stored.error.message, { fields: stored.error.fields }) };
-        return { receipt: { ...structuredClone(stored.receipt!), replayed: true } };
-      }
-      if (command.storageEpoch !== txn.storageEpoch) return { error: new CommandError("stale_epoch", `存储纪元已变为 ${txn.storageEpoch}，请重新同步`) };
-      const accepted = txn.acceptedSeq(command.actorId);
-      if (command.actorSeq !== accepted + 1) {
-        return { error: new CommandError("actor_sequence_gap", command.actorSeq <= accepted ? `序号 ${command.actorSeq} 已被使用（已接受到 ${accepted}）` : `序号缺口：期望 ${accepted + 1}，收到 ${command.actorSeq}`) };
-      }
-      // 租约在同一画布锁内核验：他人持有的字段返回 423，属于暂时性冲突，不占用序号。
-      const held = leases.conflicts(command.canvasId, touchedLeaseRefs(command), command.actorId);
-      if (held.length) {
-        return { error: new CommandError("lease_conflict", `${held.length} 个字段正被其他人编辑`, {
-          fields: held.map(lease => ({ path: `node/${lease.nodeId}/${lease.field}`, message: `正被其他人编辑，约 ${Math.max(0, lease.expiresAt - Date.now())}ms 后过期` })),
-          retryAfterMs: Math.max(0, Math.min(...held.map(lease => lease.expiresAt)) - Date.now()),
-        }) };
-      }
-      try {
-        const writes = reduceCommand(txn.reader, command, { assetExists: context.assetExists ?? defaultAssetExists });
-        return { receipt: txn.commit(writes, meta) };
-      } catch (error) {
-        if (!(error instanceof ReducerError)) throw error;
-        txn.reject(meta, { code: error.code, message: error.message, ...(error.fields.length ? { fields: error.fields } : {}) });
-        return { error: new CommandError(error.code, error.message, { fields: error.fields }) };
-      }
-    });
+    outcome = await repository.transact<Outcome>(command.canvasId, (txn) => runInTransaction(txn, command, hash, context));
   } catch (error) {
     throw toCommandError(error) ?? error;
   }
   if (!outcome) throw new CommandError("canvas_deleted", "画布不存在或已删除");
+  if ("error" in outcome) throw outcome.error;
+  return outcome.receipt;
+}
+
+export type ServerCommandBody = { kind: CanvasCommand["kind"]; payload: unknown };
+
+/**
+ * 服务端写入（Agent、生成回写，P2-08）：在画布锁内读取当前实体与版本来构造命令，
+ * 由服务端分配该 actor 的下一个序号，与用户命令走同一套校验、租约与回执。
+ * build 返回 null 表示无需写入；画布不存在返回 null。
+ */
+export async function executeServerCommand(
+  canvasId: string,
+  actorId: string,
+  build: (reader: CommandTxn["reader"], txn: { revision: number }) => ServerCommandBody | null,
+  context: CommandContext,
+): Promise<CommitReceipt | null> {
+  if (context.origin === "client") throw new CommandError("invalid_command", "客户端不能使用服务端命令入口");
+  let outcome: Outcome | "skipped" | null;
+  try {
+    const repository = context.repository ?? jsonCommandRepository;
+    outcome = await repository.transact<Outcome | "skipped">(canvasId, (txn) => {
+      const body = build(txn.reader, { revision: txn.revision });
+      if (!body) return "skipped";
+      const command = parseCommand({
+        schemaVersion: 1, commandId: randomUUID(), actorId, actorSeq: txn.acceptedSeq(actorId) + 1,
+        canvasId, storageEpoch: txn.storageEpoch, baseRevision: txn.revision, kind: body.kind, payload: body.payload,
+      });
+      return runInTransaction(txn, command, commandHash(command), context);
+    });
+  } catch (error) {
+    throw toCommandError(error) ?? error;
+  }
+  if (outcome === null) return null;
+  if (outcome === "skipped") return null;
   if ("error" in outcome) throw outcome.error;
   return outcome.receipt;
 }

@@ -44,7 +44,7 @@ import { type CanvasOperation } from "@/lib/canvas-operations";
 import { generationClaim } from "@/lib/generation-claim-client";
 import { canvasDraftKey, clearCanvasDraft, loadCanvasDraft, loadGeometryCheckpoints, saveGeometryCheckpoint } from "@/lib/canvas-drafts";
 import { toDraftBody, translateUserWrites } from "@/lib/canvas-runtime/user-actions";
-import { persistImageOutcome, persistVideoOutcome } from "@/lib/canvas-persistence";
+import { persistImageOutcome, persistVideoOutcome, postServiceWrite, type ServiceWriteBody } from "@/lib/canvas-persistence";
 import { addFixedReferences, resolveCanvasReferences } from "@/lib/canvas-references";
 import { uploadAssets, type UploadProgress, type UploadedAsset } from "@/lib/asset-upload";
 import { CanvasAssetsContext, type ReferencePickerOptions } from "./canvas-assets-context";
@@ -255,6 +255,9 @@ async function fetchEntitySnapshot(canvasId: string): Promise<ConfirmedSnapshot>
   if (!response.ok) throw new Error(`读取画布版本失败（${response.status}）`);
   return await response.json() as ConfirmedSnapshot;
 }
+
+/** 生成开始时交给服务端的 service 字段（与 generation-commands 的 START_FIELDS 一致）；其余 user 字段走 patch_nodes。 */
+const SERVICE_START_FIELDS = new Set(["status", "generationId", "errorMessage", "errorKind", "retryingSlotId", "generationRequest", "taskId", "waitedSeconds"]);
 
 /** 删除墓碑禁止同 ID 复活（contracts.md C3）：重建的节点与连线用新 ID，两端都在集合内的连线重映射。 */
 function rebuildWithNewIds(nodes: Node[], edges: Edge[]): { nodes: Node[]; edges: Edge[] } {
@@ -512,9 +515,9 @@ export function FlowCanvas({
   const markCommitted = useCallback((nodes: readonly Node[], edges: readonly Edge[]) => {
     committedRef.current = { nodes: new Map(nodes.map(node => [node.id, node])), edges: new Map(edges.map(edge => [edge.id, edge])) };
   }, []);
-  // 兼容写入（P2-08 删除）：客户端生成回写的 service 字段、画布视口与素材库，仍走旧 operations 接口，
-  // 只为被触碰的字段生成条目；失败的条目留在队列中重发，冲突时以服务端为准由远端合并恢复。
-  const legacyServiceWrites = useMemo(() => ({
+  // 画布字段兼容写入：视口与素材库列表没有领域命令，仍走旧 operations 接口，只为变化的字段生成条目。
+  // （P2-08 起 service 字段只由服务端 apply_generation 写入，这里不再处理。）
+  const canvasFieldWrites = useMemo(() => ({
     pending: [] as CanvasOperation[],
     canvasFields(base: CanvasDoc, viewport: Viewport | null, library: CanvasLibraryAsset[]): CanvasOperation[] {
       const ops: CanvasOperation[] = [];
@@ -541,18 +544,18 @@ export function FlowCanvas({
       const body = toDraftBody(writes.commands);
       if (body) await channel.submitCommand(body as { kind: CanvasCommand["kind"]; payload: unknown });
       for (const issue of writes.issues) console.warn(issue);
-      legacyServiceWrites.pending.push(...writes.legacy);
+      // P2-08：service 字段（生成状态/结果/主图）只由服务端 apply_generation 写入，本地值只作视图，不再发送。
       markCommitted(localNodes, localEdges);
       if (body) void channel.flush();
-      // 2) 兼容写入：只含被触碰的 service 字段 + 视口/素材库。
-      const canvasOps = legacyServiceWrites.canvasFields(acknowledgedRef.current, viewportDirtyRef.current ? viewportRef.current : null, libraryRef.current);
-      const operations = [...legacyServiceWrites.pending, ...canvasOps];
+      // 2) 画布字段兼容写入：只剩视口与素材库（没有对应领域命令）。
+      const canvasOps = canvasFieldWrites.canvasFields(acknowledgedRef.current, viewportDirtyRef.current ? viewportRef.current : null, libraryRef.current);
+      const operations = [...canvasFieldWrites.pending, ...canvasOps];
       if (!await waitForGestureIdle(changes, () => mounted.current)) return;
       const response = operations.length
         ? await fetch(`/api/canvases/${doc.id}/operations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operations }) })
         : await fetch(`/api/canvases/${doc.id}?background=1&sinceRevision=${acknowledgedRef.current.revision}`, { cache: "no-store" });
-      if (operations.length && response.status !== 409 && response.status < 500) legacyServiceWrites.pending = [];
-      if (response.status === 409) legacyServiceWrites.pending = [];
+      if (operations.length && response.status !== 409 && response.status < 500) canvasFieldWrites.pending = [];
+      if (response.status === 409) canvasFieldWrites.pending = [];
       // 在途响应不得在新的手势中途重建整图或回写坐标。
       if (!await waitForGestureIdle(changes, () => mounted.current)) return;
       let payload: CanvasDoc | null = null;
@@ -639,7 +642,7 @@ export function FlowCanvas({
       if (viewportVersionRef.current === viewportVersion && !canvasOps.some(op => op.path[0] === "viewport" && response.status >= 400)) viewportDirtyRef.current = false;
       dirtyVersion.current = versionAfterCommit(version, dirtyVersion.current, changes.dirty());
       savedVersion.current = version;
-      if (dirtyVersion.current === version && !legacyServiceWrites.pending.length) await clearCanvasDraft(draftKeyRef.current, checkpointThrough);
+      if (dirtyVersion.current === version && !canvasFieldWrites.pending.length) await clearCanvasDraft(draftKeyRef.current, checkpointThrough);
       checkpointFailedRef.current = false;
       reportSave({ ok: true });
     } catch (error) {
@@ -651,7 +654,7 @@ export function FlowCanvas({
         saveTimerRef.current = setTimeout(() => void save(), 500);
       }
     }
-  }, [doc.id, changes, geometry, legacyServiceWrites, markCommitted, clearDraftTimer, setNodesFromSync, setEdgesFromSync]);
+  }, [doc.id, changes, geometry, canvasFieldWrites, markCommitted, clearDraftTimer, setNodesFromSync, setEdgesFromSync]);
 
   // 命令进持久 outbox 即可恢复，不再每 200ms 把完整工作文档写入草稿。
   const scheduleSave = useCallback(() => {
@@ -659,6 +662,24 @@ export function FlowCanvas({
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => void save(), 500);
   }, [save]);
+
+  /**
+   * 生成状态回写（P2-08）：本地先更新视图，服务端在画布锁内构造 apply_generation 并核验结果。
+   * 发送前先把待提交的用户命令（例如刚新增的占位结果节点）送达，避免结果被当成孤儿。
+   * 只把开始/失败允许的 service 字段交给服务端；提示词等 user 字段由保存转成 patch_nodes。
+   */
+  const serviceWrite = useCallback((body: ServiceWriteBody, local?: Record<string, unknown>) => {
+    if (local) updateNodeData(body.nodeId, local);
+    void (async () => {
+      if (dirtyVersion.current !== savedVersion.current && !changes.active()) await save();
+      await channelRef.current?.flush();
+      await postServiceWrite(doc.id, body);
+    })().catch(error => toast.error(error instanceof Error ? error.message : "生成状态写回失败"));
+  }, [doc.id, changes, save, updateNodeData]);
+  const startWrite = useCallback((nodeId: string, generationId: string, patch: Record<string, unknown>) => {
+    const service = Object.fromEntries(Object.entries(patch).filter(([field]) => SERVICE_START_FIELDS.has(field)));
+    serviceWrite({ action: "start", nodeId, generationId, patch: service }, patch);
+  }, [serviceWrite]);
 
   // 切换画布前调用：停掉防抖、等在途保存、把最新状态落盘，返回是否成功
   const flushSave = useCallback(async (): Promise<boolean> => {
@@ -846,7 +867,7 @@ export function FlowCanvas({
       }
       const patch = applyGenerationOutcome(node.data, outcome, () => crypto.randomUUID());
       if (patch) {
-        updateNodeData(nodeId, patch);
+        serviceWrite({ action: "image", nodeId, outcome }, patch);
       }
     },
     [doc.id, updateNodeData, registerAssets],
@@ -861,7 +882,7 @@ export function FlowCanvas({
       if (orphan) {
         const patch = applyGenerationOutcome(node.data, orphan, () => crypto.randomUUID());
         if (patch) {
-          updateNodeData(node.id, patch);
+          serviceWrite({ action: "image", nodeId: node.id, outcome: orphan }, patch);
         }
         continue;
       }
@@ -873,7 +894,8 @@ export function FlowCanvas({
         ) {
           continue;
         }
-        updateNodeData(node.id, { status: "failed", errorMessage: UNCONFIRMED_RESULT_MESSAGE });
+        if (typeof node.data.generationId === "string") serviceWrite({ action: "fail", nodeId: node.id, generationId: node.data.generationId, patch: { status: "failed", errorMessage: UNCONFIRMED_RESULT_MESSAGE } }, { status: "failed", errorMessage: UNCONFIRMED_RESULT_MESSAGE });
+        else updateNodeData(node.id, { status: "failed", errorMessage: UNCONFIRMED_RESULT_MESSAGE });
       }
     }
     for (const pendingNodeId of pendingFor(doc.id)) {
@@ -895,7 +917,7 @@ export function FlowCanvas({
         return;
       }
       if (typeof node.data.generationId === "string" && view.generationId && node.data.generationId !== view.generationId) return;
-      updateNodeData(nodeId, videoNodePatchFromView(view));
+      serviceWrite({ action: "video", nodeId, taskId: view.taskId }, videoNodePatchFromView(view));
       if (isVideoWatchStopStatus(view.status)) clearPending(doc.id, nodeId);
     },
     [doc.id, updateNodeData],
@@ -918,7 +940,7 @@ export function FlowCanvas({
     for (const node of latestRef.current.nodes) {
       if (node.type !== "video") continue;
       const orphan = takeVideoOrphan(doc.id, node.id);
-      if (orphan) updateNodeData(node.id, videoNodePatchFromView(orphan));
+      if (orphan) serviceWrite({ action: "video", nodeId: node.id, taskId: orphan.taskId }, videoNodePatchFromView(orphan));
     }
     void (async () => {
       try {
@@ -1325,9 +1347,9 @@ export function FlowCanvas({
         suppressPanelForSelectionRef.current = true;
         setNodes(current => [...current.map(item => ({ ...item, selected: false })), pendingNode]);
       } else if (retrySlotId) {
-        updateNodeData(nodeId, { status: "running", generationId, errorMessage: null, retryingSlotId: retrySlotId });
+        startWrite(nodeId, generationId, { status: "running", generationId, errorMessage: null, retryingSlotId: retrySlotId });
       } else {
-        updateNodeData(nodeId, { status: "running", generationId, errorMessage: null, generationRequest: { prompt, aspectRatio, resolution, quality, count, referenceAssets: [...referenceAssets] } });
+        startWrite(nodeId, generationId, { status: "running", generationId, errorMessage: null, generationRequest: { prompt, aspectRatio, resolution, quality, count, referenceAssets: [...referenceAssets] } });
         setPanelNodeId(null);
       }
       markPending(doc.id, nodeId, pendingSourceNodeId);
@@ -1466,7 +1488,7 @@ export function FlowCanvas({
         suppressPanelForSelectionRef.current = true;
         setNodes((current) => [...current.map((item) => ({ ...item, selected: false })), pendingNode]);
       } else {
-        updateNodeData(nodeId, {
+        startWrite(nodeId, generationId, {
           status: "running",
           generationId,
           prompt,
@@ -1522,11 +1544,12 @@ export function FlowCanvas({
         } else {
           toast.error(error instanceof Error ? error.message : "生成请求失败");
         }
-        updateNodeData(nodeId, {
+        const failure = {
           status: "failed",
           errorMessage: kind === "not_logged_in" ? LOGIN_REQUIRED_MESSAGE : (error instanceof Error ? error.message : "生成失败"),
           errorKind: "network",
-        });
+        };
+        serviceWrite({ action: "fail", nodeId, generationId, patch: failure }, failure);
         clearPending(doc.id, nodeId);
         const status = (error as { status?: number }).status;
         await generationClaim(doc.id, claimNodeId, generationId, status && [400, 401, 403].includes(status) ? "complete" : "unknown").catch(() => toast.error("生成任务状态未能同步"));
@@ -1733,9 +1756,10 @@ export function FlowCanvas({
         ),
       );
     } else if (entry.type === "setPrimary") {
-      updateNodeData(entry.nodeId, entry.prev);
+      if (entry.prev.primaryResultId) serviceWrite({ action: "select", nodeId: entry.nodeId, slotId: entry.prev.primaryResultId }, entry.prev);
+      else updateNodeData(entry.nodeId, entry.prev);
     }
-  }, [doc.id, setNodes, setEdges, updateNodeData]);
+  }, [doc.id, setNodes, setEdges, updateNodeData, serviceWrite]);
 
   const redo = useCallback(() => {
     const entry = redoStackRef.current.pop();
@@ -1757,9 +1781,10 @@ export function FlowCanvas({
       setNodes((current) => [...current, ...rebuilt.nodes]);
       setEdges((current) => [...current, ...rebuilt.edges]);
     } else if (entry.type === "setPrimary") {
-      updateNodeData(entry.nodeId, entry.next);
+      if (entry.next.primaryResultId) serviceWrite({ action: "select", nodeId: entry.nodeId, slotId: entry.next.primaryResultId }, entry.next);
+      else updateNodeData(entry.nodeId, entry.next);
     }
-  }, [setNodes, setEdges, updateNodeData]);
+  }, [setNodes, setEdges, updateNodeData, serviceWrite]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1997,9 +2022,9 @@ export function FlowCanvas({
       const next = { primaryResultId: slotId, assetName: slot.assetName };
       pushUndo({ type: "setPrimary", nodeId, prev, next });
       redoStackRef.current = [];
-      updateNodeData(nodeId, next);
+      serviceWrite({ action: "select", nodeId, slotId }, next);
     },
-    [updateNodeData, pushUndo],
+    [serviceWrite, pushUndo],
   );
 
   // ---- 复制为节点：复用已保存资产，提示词引用转成可读文字，不带连线与运行状态 ----

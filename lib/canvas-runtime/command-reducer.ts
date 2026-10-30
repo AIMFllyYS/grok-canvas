@@ -261,9 +261,18 @@ function reduceItem(base: EntityReader, w: WriteSet, item: BatchItem, context: R
         w.assets.set(asset.assetName, { assetName: asset.assetName, kind: asset.kind, createdAt: asset.createdAt, missing });
       }
       const node = view().getNode(nodeId);
-      const claim = view().generationClaim(nodeId);
+      // 结果节点的占用记在来源节点上（sourceNodeId），与客户端 claimNodeId 规则一致。
+      const claim = view().generationClaim(nodeId) ?? (node && typeof node.data.sourceNodeId === "string" ? view().generationClaim(node.data.sourceNodeId) : undefined);
       // 过期结果：节点已删、已换新任务或 claim 不符时只登记素材（孤儿），不覆盖新任务。
-      if (!node || node.data.generationId !== generationId || (claim && claim.id !== claimId)) break;
+      const mode = item.payload.mode ?? "result";
+      if (!node) break;
+      if (mode === "start") {
+        // 生成开始：必须持有同 ID 的待定占用，且补丁把 generationId 设为该 ID。
+        if (!claim || claim.id !== claimId || claim.state !== "pending" || patch.generationId !== generationId) break;
+      } else if (mode === "select") {
+        // 选择已有候选：只允许主图字段，不碰生成状态。
+        if (Object.keys(patch).some(field => field !== "primaryResultId" && field !== "assetName")) invalid("选择候选只能修改 primaryResultId/assetName");
+      } else if (node.data.generationId !== generationId || (claim && claim.id !== claimId)) break;
       const issues = checkNodePatch(node.type, patch, "service");
       if (issues.length) invalid(issues.map(formatIssue).join("；"));
       const data: Record<string, unknown> = { ...node.data };

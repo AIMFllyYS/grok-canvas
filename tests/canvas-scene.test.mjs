@@ -463,7 +463,7 @@ test("FlowCanvas 接线：ReactFlow 只在 CanvasScene 中渲染并订阅手势�
   assert.doesNotMatch(flow, /legacyAdapter/, "P2-06 临时 legacy adapter 已删除");
   assert.doesNotMatch(flow, /diffCanvasOperations\(/, "普通保存不再整图 diff");
   assert.match(flow, /translateUserWrites\(/, "用户写入翻译成命令");
-  assert.equal((flow.match(/const legacyServiceWrites = /g) ?? []).length, 1, "兼容写入只有一个命名入口");
+  assert.equal((flow.match(/const canvasFieldWrites = /g) ?? []).length, 1, "画布字段兼容写入只有一个命名入口");
   assert.match(flow, /keepLocalGeometry\(/, "远端合并保留未确认几何");
   assert.match(flow, /routeNodeChanges\(/);
   assert.doesNotMatch(flow, /position: item\.from/, "旧的 setNodes 坐标撤销已删除");

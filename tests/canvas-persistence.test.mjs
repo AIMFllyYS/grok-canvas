@@ -2,67 +2,45 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { loadTypescript } from "./helpers/load-typescript.mjs";
 const loaded = await loadTypescript("lib/canvas-persistence.ts"); after(loaded.dispose);
-const operationModule = await loadTypescript("lib/canvas-operations.ts"); after(operationModule.dispose);
-const { persistImageOutcome, persistVideoOutcome } = loaded.module;
-const initial = () => ({ id: "a", name: "A", revision: 1, createdAt: "2026-10-25T00:00:00Z", viewport: { x: 0, y: 0, zoom: 1 }, edges: [], nodes: [{ id: "n", type: "image", data: { generationId: "g" } }], libraryAssets: [{ assetName: "old.png", name: "old", sources: ["imported"], addedAt: "2026-10-25T00:00:00Z" }] });
+const { persistImageOutcome, persistVideoOutcome, postServiceWrite } = loaded.module;
 const outcome = { kind: "result", generationId: "g", retrySlotId: null, prompt: "p", slots: [{ status: "success", asset: { name: "new.png" } }] };
-function harness(doc = initial(), conflict = false) {
+
+function harness(responses) {
   const calls = [];
-  let value = structuredClone(doc), puts = 0;
-  return { calls, current: () => value, fetch: async (url, init) => {
-    calls.push(url);
-    assert.ok(String(url).startsWith("/api/canvases/a"));
-    if (!init?.method) { assert.ok(String(url).includes("background=1")); return new Response(JSON.stringify(value)); }
-    const body = JSON.parse(init.body); puts++;
-    if (conflict && puts === 1) { value.name = "用户的新标题"; value.revision++; return new Response(null, { status: 409 }); }
-    assert.equal(init.method, "POST");
-    value = { ...operationModule.module.applyCanvasOperations(value, body.operations), revision: value.revision + 1 };
-    return new Response(JSON.stringify(value));
+  return { calls, fetch: async (url, init) => {
+    calls.push({ url: String(url), method: init?.method, body: init?.body ? JSON.parse(init.body) : null });
+    const next = responses.shift() ?? { status: 200, body: { status: "applied" } };
+    return new Response(next.body === null ? null : JSON.stringify(next.body), { status: next.status });
   } };
 }
-test("后台图片回写保留旧目录并登记新候选，不访问B画布", async () => {
-  const h = harness(); await persistImageOutcome("a", "n", outcome, h);
-  assert.deepEqual(h.current().libraryAssets.map(a => a.assetName), ["old.png", "new.png"]);
-  assert.equal(h.current().nodes[0].data.assetName, "new.png");
-});
-test("409重取后保留用户新标题和目录", async () => {
-  const h = harness(initial(), true); await persistImageOutcome("a", "n", outcome, h);
-  assert.equal(h.current().name, "用户的新标题");
-  assert.equal(h.calls.length, 4);
-});
-test("节点已删仍登记图片并保留orphan，不复活节点", async () => {
-  const doc = initial(); doc.nodes = [];
-  let orphan = false;
-  const h = harness(doc); await persistImageOutcome("a", "n", outcome, { ...h, orphan: () => { orphan = true; } });
-  assert.equal(orphan, true); assert.equal(h.current().nodes.length, 0); assert.equal(h.current().libraryAssets.length, 2);
-});
-test("过期图片任务仍入库，但不能覆盖较新的任务状态", async () => {
-  const doc = initial(); doc.nodes[0].data.generationId = "newer";
-  const h = harness(doc); await persistImageOutcome("a", "n", outcome, h);
-  assert.equal(h.current().nodes[0].data.generationId, "newer");
-  assert.equal(h.current().nodes[0].data.assetName, undefined);
-  assert.deepEqual(h.current().libraryAssets.map(a => a.assetName), ["old.png", "new.png"]);
-});
-test("回写磁盘失败明确抛错，不伪装保存成功", async () => {
-  const h = harness();
-  await assert.rejects(persistImageOutcome("a", "n", outcome, { fetch: (url, init) => init.method === "POST" ? Promise.resolve(new Response(null, { status: 500 })) : h.fetch(url, init) }), /写回原画布失败/);
-});
-test("整张画布删除后不发送PUT", async () => {
-  await persistImageOutcome("a", "n", outcome, { fetch: async (_url, init) => { assert.equal(init.method, undefined); return new Response(null, { status: 404 }); } });
-});
-test("后台视频回写保留图片目录，不将mp4放入库", async () => {
-  const doc = initial(); doc.nodes = [{ id: "n", type: "video", data: { taskId: "task", status: "running" } }];
-  const h = harness(doc);
-  await persistVideoOutcome("a", "n", { taskId: "task", requestId: "request", canvasId: "a", nodeId: "n", status: "completed", waitedSeconds: 2, result: { assetName: "video.mp4", localUrl: "/api/assets/video.mp4", bytes: 42 }, error: null }, h);
-  assert.deepEqual(h.current().libraryAssets.map(a => a.assetName), ["old.png"]);
-  assert.equal(h.current().nodes[0].data.assetName, "video.mp4");
-  assert.equal(h.current().nodes[0].data.status, "idle");
-});
-test("旧视频任务结果不能覆盖较新的任务", async () => {
-  const doc = initial();
-  doc.nodes = [{ id: "n", type: "video", data: { generationId: "new", status: "running" } }];
-  const h = harness(doc);
-  await persistVideoOutcome("a", "n", { taskId: "old", generationId: "old", requestId: "r", canvasId: "a", nodeId: "n", status: "completed", waitedSeconds: 2, result: { assetName: "old.mp4", localUrl: "/api/assets/old.mp4", bytes: 42 }, error: null }, h);
-  assert.equal(h.current().nodes[0].data.status, "running");
+
+test("后台图片回写只 POST 一次服务端结果登记，不再 GET 整图再 diff", async () => {
+  const h = harness([]);
+  await persistImageOutcome("a", "n", outcome, h);
   assert.equal(h.calls.length, 1);
+  assert.deepEqual(h.calls[0], { url: "/api/canvases/a/service-write", method: "POST", body: { action: "image", nodeId: "n", outcome } });
+});
+
+test("视频回写只提交 taskId，结果由服务端读取任务记录生成", async () => {
+  const h = harness([]);
+  await persistVideoOutcome("a", "v", { taskId: "t1", requestId: "r", canvasId: "a", nodeId: "v", status: "completed", waitedSeconds: 3, result: { assetName: "fake.mp4", localUrl: "", bytes: 1 }, error: null }, h);
+  assert.deepEqual(h.calls[0].body, { action: "video", nodeId: "v", taskId: "t1" }, "浏览器传来的结果视图不被信任");
+});
+
+test("节点已删：服务端返回 orphan 时回调暂存；画布已删 404 不抛错也不重建", async () => {
+  let orphaned = 0;
+  const h = harness([{ status: 200, body: { status: "orphan" } }, { status: 404, body: { status: "canvas_deleted" } }]);
+  await persistImageOutcome("a", "n", outcome, { ...h, orphan: () => orphaned++ });
+  assert.equal(orphaned, 1);
+  assert.equal(await postServiceWrite("a", { action: "image", nodeId: "n", outcome }, h), "canvas_deleted");
+});
+
+test("租约等暂时性冲突重试同一请求；确定性拒绝直接报错", async () => {
+  const h = harness([{ status: 423, body: { error: { code: "lease_conflict", message: "占用", retryAfterMs: 1 } } }, { status: 200, body: { status: "applied" } }]);
+  assert.equal(await postServiceWrite("a", { action: "image", nodeId: "n", outcome }, h), "applied");
+  assert.equal(h.calls.length, 2);
+  assert.deepEqual(h.calls[0].body, h.calls[1].body);
+  const rejected = harness([{ status: 400, body: { error: { message: "生成结果没有服务端生成记录，拒绝登记" } } }]);
+  await assert.rejects(postServiceWrite("a", { action: "image", nodeId: "n", outcome }, rejected), /生成记录/);
+  assert.equal(rejected.calls.length, 1);
 });
