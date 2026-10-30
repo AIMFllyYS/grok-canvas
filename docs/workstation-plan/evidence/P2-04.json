@@ -1,0 +1,39 @@
+{
+  "taskId": "P2-04",
+  "sourceCommit": "49c9f70bb4385ed55e7ce64d8567591e4f577bd2",
+  "status": "passed",
+  "baseCommit": "98a184dc",
+  "red": {
+    "command": "node --test tests/canvas-history-leases.test.mjs",
+    "exitCode": 1,
+    "assertion": "history.ts/lease-service.ts 替换为桩（撤销恒返回 ok:false、租约恒成功、TTL=0）时 12 项全部失败。另有一次中间状态的运行（真实 history/lease，但 service/reducer/旧租约尚未改）：12 项中 6 项失败，失败断言包括：服务端冲突缺 fields（TypeError reading 'map'）、租约冲突未被拒绝（Missing expected rejection）、EDIT_LEASE_MS 仍为 15000、hook 未按 1s 续期、test:commands 未登记。"
+  },
+  "checks": [
+    {"command": "node --test tests/canvas-history-leases.test.mjs tests/generation-claims.test.mjs", "exitCode": 0, "evidence": "本地 15/15"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "本地无错误；PR CI 三矩阵复跑"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "本地 9 个套件共 319 项（commands 64 = 19 + 16 + 17 + 12）；agent 套件在旧租约接口适配后仍通过"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "edit-lease 路由与 hook 改动通过生产构建；tsconfig 副作用已还原"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "behaviour": {
+    "fieldMerge": "A 移动 x，B 改 x 的 prompt，A 撤销：x 复位，B 的 prompt 保留",
+    "wholeUndoReject": "B 之后再改 x 的位置，A 的撤销在客户端返回 conflicts=[node/x/geometry]；用过期读取器强行生成的撤销被服务端整批拒绝，error.fields=[node/x/geometry]，同批的 y 没有被半撤销",
+    "group100": "100 节点群组撤销，其中 g57 被他人移动：客户端与服务端都只报 node/g57/geometry，100 个节点全部保持当前值",
+    "redo": "redo 基于 undo 回执产生的新版本；undo 之后他人修改 x，redo 被拒",
+    "generationSafe": "新增节点之后写入了生成结果（entityVersion 变化），撤销新增被拒，结果保留",
+    "deleteUndo": "撤销删除用新 ID 重建节点、正文和连线，并返回 idMap；旧 ID 仍被墓碑阻断",
+    "historySize": "历史条目只保存受影响字段（正文撤销条目小于 600 字节），不保存 CanvasDoc",
+    "leases": "TTL 4000ms，续期 1000ms；owner+token 匹配才能续期或释放；重新获取会换发新 token，旧 token 迟到无效；重复释放返回 false 且无副作用；geometry 锁不挡 prompt；content 锁只锁该节点的正文",
+    "transactional": "command-service 在画布锁内核验租约：他人持有 geometry 时 move 返回 423 lease_conflict，fields=[node/x/geometry]，附带 retryAfterMs，不占用 actorSeq；过期后同一序号的命令提交成功；删除节点时检查该节点的三个字段",
+    "legacy": "旧 claimEditLease/releaseEditLease/editLeaseActive 由同一 lease-service 提供（TTL 4s）；缺 token 的旧调用不能释放他人租约；hook 改为每 1s 带 token 续期，续期失败重新获取一次；edit-lease 路由支持 geometry 字段与 renew 动作"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P2-04 manual=false；UI 历史按钮接线留给 P2-06/P2-07"},
+  "act": "实现后首轮专测 3 项失败。前两项是测试本身的问题：被客户端判定冲突而未发送的撤销也消耗了 helper 的 actorSeq，导致下一条命令出现序号缺口；已改为复用同一 ids，冲突语义不变。第三项是 4s 租约在测试里已经过期，删除命令因此没有冲突；测试改为先断言租约已过期，再重新获取后检查，并同时断言冲突路径为 node/y/content。修正后全量复验通过。交接：P2-06 用 lease-service 的 acquire/renew/release（owner 应为持久 actorId），用 history 的 recordCommitted 记录用户命令；Agent/生成结果命令不进入用户历史；冲突时由 UI 展示 fields，不自动决定保留哪一方。",
+  "risks": [
+    "租约是进程内存，网关重启即丢；持久化由 P3-04 接管",
+    "旧 hook 的 owner 是每次聚焦随机生成的 UUID，与命令 actorId 不同；UI 接入命令（P2-06/07）时必须统一为 actorId，否则用户自己的租约会挡住自己的命令",
+    "撤销删除会产生新 ID：依赖旧节点 ID 的外部引用（如进行中的生成任务）会成为孤儿，这是有意的"
+  ],
+  "next": "P2-05"
+}
