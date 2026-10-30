@@ -1,0 +1,45 @@
+{
+  "taskId": "P6-01",
+  "sourceCommit": "cf178c96014c6d7921ee7977e3e9fd35aadb63d5",
+  "status": "passed",
+  "baseCommit": "a316ed52",
+  "red": {
+    "command": "node --test tests/performance-metrics.test.mjs",
+    "exitCode": 1,
+    "assertion": "metrics.ts / fixture.mjs / report.mjs 换成只抛“未实现”的桩、Scene/FlowCanvas/DB service 为集成分支版本时 9/9 失败。说明：模块草稿写在测试之前，红灯时被替换为桩。"
+  },
+  "checks": [
+    {"command": "node --test tests/performance-metrics.test.mjs", "exitCode": 0, "evidence": "9/9：最近秩百分位已知序列（1..100 的 p50/p95/p99=50/95/99）、空样本抛错；空数据是 unmeasured 不是 0ms、NaN/Infinity/负数/未知名丢弃并计数；容量 100 写 1000 条只保留最新 100 条、overwritten=900；关闭时不写入、元数据只保留白名单数值与安全 ID（正文/token/提示词/路径被丢弃）；pointer-to-paint rAF 关联与 100ms 无帧 unmeasured、关闭时不注册 rAF；fixture 4 档数量/类型比例/2N 唯一边/局部密集/100KB 长文；CLI 必须显式输出、wx 不覆盖；报告缺指标未测、空样本不通过、超目标 fail、缺环境 incomplete；接线约束"},
+    {"command": "node --test tests/canvas-performance.test.mjs", "exitCode": 0, "evidence": "既有计数型性能测试未退化"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "11 个套件共 403 项（新增 test:performance 进入全量入口）"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "构建通过；tsconfig 副作用已还原"},
+    {"command": "node scripts/performance/baseline.e2e.mjs http://127.0.0.1:3303/ <out> 1000 5000", "exitCode": 0, "evidence": "隔离 standalone + 临时数据目录，经公开 HTTP 接口导入合成 fixture，headless Chromium（ANGLE D3D11, RTX 5060 Laptop）拖动 120 帧，测量器开/关各一次，结果见 baseline"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "samplingSchema": {
+    "metrics": "pointer_to_paint_ms, pointer_to_paint_unmeasured, frame_interval_ms, react_commit_ms, full_scan_count, clone_count, outbox_items, outbox_bytes, db_queue_ms, db_txn_ms, media_active, subscriptions, event_to_visible_ms, local_commit_ms",
+    "snapshot": "{schemaVersion, environment{media,build,hardware,version,renderer,nodes}, capacity, size, dropped, overwritten, metrics{name:{status,count,p50,p95,p99,max,mean}|{status:'unmeasured',count:0}}}",
+    "enable": "localStorage['grok-canvas:metrics']='1'；导出 globalThis.__grokCanvasMetrics.snapshot(env)",
+    "actions": "基线动作：加载 2N 边+首个文本 100KB 长文的 fixture → 从正文区按下拖动 node-0 共 120 帧 → 松手；记录首交互时间、页面侧独立 rAF 帧间隔（开/关两次都测）、测量器 snapshot"
+  },
+  "baseline": {
+    "files": "docs/workstation-plan/baselines/p2-baseline.json（开/关对照原始结果）、p2-report.json（report.mjs 按 C9 目标评估）",
+    "environment": "Windows，headless Chromium（Playwright 1.63），ANGLE D3D11 / NVIDIA RTX 5060 Laptop，production standalone，合成数据、无媒体（media=none）",
+    "results": {
+      "1000 节点": "首交互 2.8–3.3s；页面侧帧间隔 p50/p95/p99 = 16.7/33.4/200ms（开/关一致）；测量器：frame p95 33.4ms（fail，目标 ≤20）、pointer-to-paint p95 13.8ms（pass）",
+      "5000 节点": "首交互 12.9–13.2s；帧间隔 p50/p95/p99 = 67–83/300/567ms；测量器：frame p95 300ms（fail）、pointer-to-paint p95 14ms（pass，22 次 unmeasured）"
+    },
+    "overhead": "测量器开/关的页面侧帧间隔分位数在 1000 节点几乎相同（16.7/33.4 vs 16.7/33.4），5000 节点 p50 由 66.7→83.3ms，p95/p99 相同",
+    "unmeasured": "event_to_visible_ms、local_commit_ms、10000 节点、冷/热媒体、真实硬件桌面与 Electron 窗口均未测"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P6-01 manual=false；用户按相同动作录制的真实 trace 尚未提供，报告中 trace=unmeasured，不阻止测量工具交付"},
+  "act": "这是 P2 版本基线，不是性能达标结论：1000 节点帧间隔 p95 33ms、5000 节点 p95 300ms 都未达到 C9 的 p95≤20ms，首交互 5000 节点约 13s（目标 ≤2s），需要 P4 的可见性索引、轻量投影与概览来解决；pointer-to-paint 已在目标内。rAF 间隔与 pointer-to-paint 分开记录；无法关联的输入记为 unmeasured，不估算。本 Issue 只是观测工具，不能关闭 P6-03。",
+  "risks": [
+    "headless Chromium 与共享机器的数值不等于指定硬件达标证据（C9）；最终以用户真实 trace 为准。",
+    "react_commit_ms 依赖 React Profiler，生产构建不回调，只在开发/profiling 构建可得。",
+    "clone_count、media_active、subscriptions、event_to_visible_ms、local_commit_ms 已有名称与上限，接入点在 P4/P5（媒体调度、增量同步）。"
+  ],
+  "next": "P3-04"
+}

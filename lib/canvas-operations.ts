@@ -1,6 +1,7 @@
 import type { CanvasDoc } from "./canvas-store";
 import { createReferenceIndex, resolveCanvasReferences, type ReferenceEdge, type ReferenceNode } from "./canvas-references";
 import { isLibraryAsset } from "./canvas-library";
+import { canvasMetrics } from "./canvas-runtime/metrics";
 
 export type CanvasValue = { exists: false } | { exists: true; value: unknown };
 export type CanvasOperation = {
@@ -48,6 +49,8 @@ export function readCanvasOperationValue(doc: CanvasDoc, op: CanvasOperation): C
 
 /** Produce conditional field changes from the last acknowledged snapshot. */
 export function diffCanvasOperations(before: CanvasDoc, after: CanvasDoc, createId: () => string = () => crypto.randomUUID()): CanvasOperation[] {
+  // 诊断：整图差异次数（P6-01）。默认关闭时是一次布尔判断。
+  canvasMetrics.record("full_scan_count", 1, { nodeCount: after.nodes.length });
   const removals: CanvasOperation[] = [], changes: CanvasOperation[] = [], additions: CanvasOperation[] = [];
   const push = (target: CanvasOperation["target"], entityId: string | undefined, path: string[], oldValue: CanvasValue, newValue: CanvasValue) => {
     if (!equal(oldValue, newValue)) changes.push({ id: createId(), target, entityId, path, before: oldValue, after: newValue });
