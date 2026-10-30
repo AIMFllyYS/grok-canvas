@@ -1,0 +1,31 @@
+{
+  "taskId": "P3-04",
+  "sourceCommit": "bff1ddf0ff71880217244c0fef9494e87261e943",
+  "status": "passed",
+  "baseCommit": "715b85bd",
+  "red": {
+    "command": "node --test tests/db-runtime-records.test.mjs",
+    "exitCode": 1,
+    "assertion": "tasks/conversations/control repository 与 import-catalog 为只抛“未实现”的桩、002-runtime.sql 不存在时 9/9 失败。"
+  },
+  "checks": [
+    {"command": "node --test tests/db-runtime-records.test.mjs", "exitCode": 0, "evidence": "9/9（真实临时 SQLite）：C5 剩余 14 张表；视频任务 pending/save_failed/已完成未释放 claim 三类可恢复、已释放/失败不可恢复，requestId/snapshot/remoteUrl/result/claim 往返一致，错画布与缺 canvasId 拒绝；生成来源相同快照幂等、不同快照 generation_record_conflict 且原记录保留；claim unknown/pending 不允许重新收费生成、跨画布不可见、lease token 保留；123 条消息按 ordinal 每页 ≤50 完整重建 ID 与顺序、工具调用/结果 parts 原样、limit 51 拒绝、错画布为空、旧 AgentState 顶层消息与会话去重/只有顶层时生成 legacy-<canvas> 会话；回执 (canvas,actor,seq) 唯一、事件分页、水位、2500 个旧 operationId 全量保存且幂等、偏好拒绝 auth/oauth 键、导入运行与备份清单；导入目录覆盖 canvases/agent/studio/video-tasks/generations/app-state/assets 并排除 auth、未登记路径 unknown、缺失/损坏/版本不支持/正常四种结果区分；Worker 派发"},
+    {"command": "node --test tests/db-core.test.mjs", "exitCode": 0, "evidence": "迁移记录随 002 增加，001 约束测试未退化"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "10 个套件共 410 项（含 agent.test、video-tasks、generation-record）"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "handoffToP3_06": {
+    "catalog": "lib/db/import-catalog.ts：IMPORT_CATALOG（kind/pattern/tables/idTransform/checksum/onMissing/onCorrupt/supportedVersions/excluded）、classifySource(path)、sourceOutcome({exists,parse,supportedVersions}) → ok|missing|corrupt|unsupported_version",
+    "repositories": "tasks.cjs：putTaskRun/getTaskRun/listRecoverable/putGenerationRecord/getGenerationRecord/putClaim/getClaim/claimAllowsNewGeneration/putLease/getLease；conversations.cjs：putConversation/listConversations/listMessages/conversationsFromAgentState；control.cjs：putReceipt/getReceipt/appendEvent/listEvents/putWatermark/getWatermark/recordLegacyOperationIds/hasLegacyOperationId/setPreference/getPreference/startImportRun/updateImportRun/getImportRun/putBackupManifest/getBackupManifest",
+    "missingVsCorrupt": "缺失（文件不存在）与损坏（无法解析）是不同结果：画布损坏阻断该画布不写部分实体；会话损坏不影响画布；视频任务损坏不得据此重新提交收费生成"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P3-04 manual=false；只用合成记录，旧文件读写未替换"},
+  "act": "首轮即全部通过。设计取舍：task_runs 保存 claim 的 nodeId 与 id 两列以完整还原 video-tasks 记录；生成来源以规范化（键排序）快照的 sha256 判断幂等，避免键顺序不同被误判为冲突；workspace_preferences 在 SQL CHECK 与 repository 两处拒绝 auth/oauth 键；legacy_operation_ids 用 WITHOUT ROWID 表。暂不替换旧文件读写，未修改上游生成参数、鉴权或额度展示。",
+  "risks": [
+    "导入执行（逐文件读取、校验、写入、恢复游标）在 P3-06；本 Issue 只提供目录与 repository。",
+    "edit_leases 表用于持久化/导入，进程内租约服务仍是 lease-service.ts 的内存实现，切换在 P3-08。"
+  ],
+  "next": "P3-05"
+}
