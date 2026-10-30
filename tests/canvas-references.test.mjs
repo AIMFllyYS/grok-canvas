@@ -66,6 +66,7 @@ test("图片路由在非法、超限、失效token和缺失文件时均不调用
       if (name === "@/lib/api-error") return { errorResponse: error => Response.json({ error: { message: error.message } }, { status: 500 }) };
       if (name === "@/lib/assets") return { assetToDataUri: async name => { if (name === "missing.png") throw new Error("文件不存在"); return `data:image/png;base64,${name}`; } };
       if (name === "@/lib/generation-batch") return { persistImageBatch: async (_images, _count, snapshot) => { snapshots.push(snapshot); return []; } };
+      if (name === "@/lib/media/derivatives") return { scheduleDerivatives: () => {} };
       if (name === "@/lib/xai/client") return { editImage: async body => { calls.push(body); return { data: [] }; }, generateImages: async body => { calls.push(body); return { data: [] }; } };
       throw new Error(`未模拟依赖：${name}`);
     } });

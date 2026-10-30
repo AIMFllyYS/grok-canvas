@@ -4,6 +4,7 @@ import { errorResponse } from "@/lib/api-error";
 import { assetToDataUri } from "@/lib/assets";
 import { validateImageReferences } from "@/lib/canvas-references";
 import { persistImageBatch } from "@/lib/generation-batch";
+import { scheduleDerivatives } from "@/lib/media/derivatives";
 import { isGenerationCount, parseGenerationCount } from "@/lib/multi-image";
 import { editImage, generateImages } from "@/lib/xai/client";
 
@@ -94,6 +95,8 @@ export async function POST(request: Request) {
       referenceAssets: [...refs],
       startedAt: new Date(startedAt).toISOString(),
     });
+    // 结果落盘后的派生排队接点（P4-02）：不等待，失败不影响正式资产与生成记录。
+    for (const slot of slots) if (slot.status === "success") scheduleDerivatives(slot.asset.name);
     return NextResponse.json({
       requested: count,
       mode: refs.length > 0 ? "i2i" : "t2i",

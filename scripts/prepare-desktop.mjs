@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkStandalone, currentBuildDir } from "./build-root.mjs";
 import { stageDbRuntime } from "./db-runtime.mjs";
+import { stageMediaRuntime } from "./media-runtime.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 // 只接受与当前 GROK_CANVAS_BUILD_DIR 一致、BUILD_ID 对得上的 standalone，拒绝旧产物或混拼目录。
@@ -41,6 +42,8 @@ if (existsSync(path.join(root, "public"))) await cp(path.join(root, "public"), p
 
 // Electron 的 DB 运行资源单独 staging，不复用 standalone 里给系统 Node 准备的那份。
 const db = await stageDbRuntime({ projectRoot: root, destination: path.join(destination, "db-runtime"), target });
+// 媒体派生 Worker 与 sharp native（P4-02）：服务端 cwd 为包根，derivatives.ts 默认从 media-runtime/ 加载。
+const media = await stageMediaRuntime({ projectRoot: root, destination: path.join(destination, "media-runtime"), target });
 await writeFile(path.join(destination, "desktop-runtime.json"), `${JSON.stringify({
   schema: 1,
   distDir: build.distDir,
@@ -48,6 +51,8 @@ await writeFile(path.join(destination, "desktop-runtime.json"), `${JSON.stringif
   dbWorker: `db-runtime/${db.worker}`,
   target: db.target,
   driverVersion: db.driverVersion,
+  mediaWorker: `media-runtime/${media.worker}`,
+  sharpVersion: media.version,
 }, null, 2)}\n`);
 
 console.log(`Prepared desktop server at ${destination} (distDir ${build.distDir}, BUILD_ID ${build.buildId}, db-runtime ${db.target})`);
