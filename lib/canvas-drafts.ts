@@ -2,6 +2,7 @@ import type { CanvasDoc } from "./canvas-store";
 import type { CanvasOperation } from "./canvas-operations";
 import { createLatestQueue } from "./canvas-runtime/latest-queue";
 import type { GeometryCheckpoint } from "./canvas-runtime/geometry-journal";
+import { openCanvasDatabase } from "./canvas-runtime/outbox";
 
 export type CanvasDraft = {
   key: string;
@@ -12,17 +13,10 @@ export type CanvasDraft = {
   pending?: { base: CanvasDoc; snapshot: CanvasDoc; operations: CanvasOperation[] } | null;
 };
 
-let database: Promise<IDBDatabase> | undefined;
 const queue = createLatestQueue();
+/** v1 drafts 与 v2 outbox 共用同一个本地库（v2 升级保留 drafts，见 outbox.ts）。 */
 function openDatabase(): Promise<IDBDatabase> {
-  if (!database) database = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open("grok-canvas-drafts", 1);
-    request.onupgradeneeded = () => request.result.createObjectStore("drafts", { keyPath: "key" });
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("无法打开本地草稿"));
-    request.onblocked = () => reject(new Error("本地草稿数据库被占用"));
-  }).catch(error => { database = undefined; throw error; });
-  return database!;
+  return openCanvasDatabase();
 }
 function enqueue<T>(action: () => Promise<T>): Promise<T> {
   return queue.barrier(action);
@@ -50,6 +44,14 @@ export function canvasDraftKey(canvasId: string): string {
 }
 export function loadCanvasDraft(key: string): Promise<CanvasDraft | undefined> {
   return enqueue(() => transact("readonly", store => store.get(key)));
+}
+/** 只读 v1 兼容入口：列出该画布所有标签页留下的完整草稿（不含坐标检查点），供一次性恢复转换。 */
+export function listLegacyDrafts(canvasId: string): Promise<CanvasDraft[]> {
+  return enqueue(async () => {
+    const prefix = `${canvasId}:`;
+    const records = await transact<CanvasDraft[]>("readonly", store => store.getAll(IDBKeyRange.bound(prefix, `${prefix}\uffff`)) as IDBRequest<CanvasDraft[]>);
+    return records.filter(record => record.canvasId === canvasId && !record.key.includes(":geometry:"));
+  });
 }
 /** 调用者传入不可变文档引用；只在任务真正开始时由 IndexedDB 克隆一次。 */
 export function saveCanvasDraft(draft: CanvasDraft): Promise<void> {
