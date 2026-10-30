@@ -1,5 +1,6 @@
 import { loadCanvas, updateCanvas } from "./canvas-store";
 import { dataDir } from "./data-dir";
+import { maintenanceState } from "./db/maintenance";
 
 const globals = globalThis as typeof globalThis & { __grokGenerationLive?: Map<string, { id: string; expiresAt: number }> };
 const live = globals.__grokGenerationLive ??= new Map();
@@ -12,6 +13,8 @@ export class GenerationClaimError extends Error {
 
 /** Claims are persisted with the canvas under the same lock used by every writer. */
 export async function claimGeneration(canvasId: string, nodeId: string, id: string): Promise<void> {
+  // 存储切换期间不开始新的收费生成。
+  if (maintenanceState().active) throw new GenerationClaimError("系统正在维护，暂不能开始新的生成，请稍候再试");
   const key = liveKey(canvasId, nodeId);
   let saved;
   let registered = false;

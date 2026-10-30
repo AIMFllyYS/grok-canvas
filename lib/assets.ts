@@ -1,7 +1,11 @@
 import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { publishFile } from "./media/asset-publication";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { dataDir } from "./data-dir";
+
+/** P3-08：SQLite 权威模式下生成来源记录写入数据库（不可变，相同快照幂等）；SQL 实现按需动态加载。 */
+const sqliteMode = () => existsSync(path.join(dataDir(), "storage-state.json"));
 
 export const ASSETS_DIR = path.join(dataDir(), "assets");
 export const GENERATIONS_DIR = path.join(dataDir(), "generations");
@@ -49,6 +53,7 @@ export type GenerationRecord = GenerationSnapshotAny & {
 /** Publish a complete record exclusively: subsequent writes cannot overwrite it. */
 export async function saveGenerationRecord(assetName: string, snapshot: GenerationSnapshotAny): Promise<void> {
   if (!isSafeAssetName(assetName)) throw new Error("unsafe asset name");
+  if (sqliteMode()) { await (await import("./db/sql-records")).saveGenerationRecordSql(assetName, snapshot, new Date().toISOString()); return; }
   await mkdir(GENERATIONS_DIR, { recursive: true });
   const destination = path.join(GENERATIONS_DIR, `${assetName}.json`);
   const temporary = path.join(GENERATIONS_DIR, `${assetName}.${crypto.randomUUID()}.tmp`);
@@ -64,6 +69,7 @@ export async function saveGenerationRecord(assetName: string, snapshot: Generati
 /** Old/uploaded images have no record; never invent history from mutable canvas data. */
 export async function readGenerationRecord(assetName: string): Promise<GenerationRecord | null> {
   if (!isSafeAssetName(assetName)) throw new Error("unsafe asset name");
+  if (sqliteMode()) return (await import("./db/sql-records")).readGenerationRecordSql(assetName);
   try {
     return JSON.parse(await readFile(path.join(GENERATIONS_DIR, `${assetName}.json`), "utf8")) as GenerationRecord;
   } catch (error) {

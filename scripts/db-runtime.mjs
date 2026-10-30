@@ -57,7 +57,7 @@ export async function stageDbRuntime({ projectRoot, destination, target = native
   await rm(destination, { recursive: true, force: true });
   const dbDir = path.join(destination, "lib", "db");
   await mkdir(dbDir, { recursive: true });
-  for (const file of ["worker.cjs", "driver.cjs", "migrate.cjs", "backup.cjs", "restore.cjs"]) await cp(path.join(projectRoot, "lib", "db", file), path.join(dbDir, file));
+  for (const file of ["worker.cjs", "driver.cjs", "migrate.cjs", "backup.cjs", "restore.cjs", "command-repository.cjs", "sql-canvas.cjs"]) await cp(path.join(projectRoot, "lib", "db", file), path.join(dbDir, file));
   const repositories = path.join(projectRoot, "lib", "db", "repositories");
   if (existsSync(repositories)) {
     await cp(repositories, path.join(dbDir, "repositories"), { recursive: true, filter: (source) => !path.extname(source) || path.extname(source) === ".cjs" });

@@ -22,6 +22,12 @@ export async function loadTypescript(entry, { packages = false } = {}) {
       dependencies.push(dependency);
       return `from ${quote}${name.replace(/\.ts$/, "")}.js${quote}`;
     });
+    // 按需动态加载的相对模块（如存储模式切换后的 SQL 实现）同样转译并改写扩展名。
+    code = code.replace(/import\(([\"'])(\.{1,2}\/[^\"']+)\1\)/g, (_match, quote, name) => {
+      const dependency = path.normalize(path.join(path.dirname(relative), name.endsWith(".ts") ? name : `${name}.ts`));
+      dependencies.push(dependency);
+      return `import(${quote}${name.replace(/\.ts$/, "")}.js${quote})`;
+    });
     for (const dependency of dependencies) await emit(dependency);
     const destination = path.join(directory, relative.replace(/\.ts$/, ".js"));
     await mkdir(path.dirname(destination), { recursive: true });
