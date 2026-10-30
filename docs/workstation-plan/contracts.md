@@ -94,6 +94,7 @@ payload 必须用 Zod discriminatedUnion 严格解析，不能将上面的 unkno
 - 活跃手势不应用远端同geometry补丁：暂存并在结束后比较版本；不同字段立即应用。冲突可见，不静默选本地或远端。
 - 历史保存命令前值和提交后字段版本，不保存整张画布。undo是一条新的条件命令；任何字段所有权改变则整条undo拒绝，不能半撤销群组。
 - redo基于undo产生的新版本，仍有前置条件。Agent后续字段、素材结果不能随用户历史回滚。
+- P2-04 固化于 `lib/canvas-runtime/history.ts`：撤销 add_nodes = 以提交后 entityVersion 为前置的 delete_nodes（生成结果写入后撤销被拒，不删后来的结果）；撤销 delete_nodes 因墓碑禁止同 ID 复活，改用新节点/文档/连线 ID 重建并返回 idMap。版本冲突时服务端在 `error.fields` 中给出全部冲突路径（`node/<id>/<field>`、`document/<id>/content`、`edge/<id>/entity`、`canvas/<id>/name`）。租约冲突 423 同样带 fields 与 retryAfterMs，且不占用 actorSeq。影响：P2-06/P2-07 的 UI 历史接线。
 - 客户端actorId持久于独立会话存储，actorSeq和命令在IndexedDB同事务分配。不能刷新后复用旧actorId但序号回到1。
 - IndexedDB升级为v2，增加 `outbox`（复合key=[canvasId,actorId,actorSeq]）、`checkpoints`、`client_state`；保留v1 drafts用于一次恢复转换。
 - outbox项形状 `{command,state:"queued"|"sent"|"conflict",createdAt,bytes}`。sent载荷/ID不可改；queued同字段可合并，保留最早before和最新after。

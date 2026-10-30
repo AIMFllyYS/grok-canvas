@@ -9,7 +9,8 @@ import { assetPath, isSafeAssetName } from "../assets";
 import { assertClientCommand, canonicalCommand, CommandValidationError, LIMITS, parseCommand } from "./command-schema";
 import { reduceCommand, ReducerError } from "./command-reducer";
 import { jsonCommandRepository, type CommandRepository } from "./json-repository";
-import { COMMAND_ERROR_STATUS, type CommandErrorBody, type CommandErrorCode, type CommandErrorField, type CommitReceipt } from "./types";
+import { getLeaseService, isLeaseField, LEASE_FIELDS, type LeaseRef, type LeaseService } from "./lease-service";
+import { COMMAND_ERROR_STATUS, type BatchItem, type CanvasCommand, type CommandErrorBody, type CommandErrorCode, type CommandErrorField, type CommitReceipt } from "./types";
 
 export { JSON_STORAGE_EPOCH } from "./command-state";
 export const COMMAND_BODY_LIMIT = LIMITS.requestBytes;
@@ -47,7 +48,23 @@ export type CommandContext = {
   origin: CommandOrigin;
   assetExists?: (assetName: string) => boolean;
   repository?: CommandRepository;
+  /** 测试可注入带假时钟的租约服务；默认进程单例。 */
+  leases?: LeaseService;
 };
+
+/** 命令会写到的受租约保护字段：move→geometry；patch content/prompt；删除节点→三者全部。 */
+export function touchedLeaseRefs(command: CanvasCommand): LeaseRef[] {
+  const refs = new Map<string, LeaseRef>();
+  const add = (nodeId: string, field: LeaseRef["field"]) => refs.set(`${nodeId}/${field}`, { nodeId, field });
+  const items: BatchItem[] = command.kind === "batch" ? command.payload.commands : [{ kind: command.kind, payload: command.payload } as BatchItem];
+  for (const item of items) {
+    if (item.kind === "move_nodes") for (const move of item.payload.items) add(move.nodeId, "geometry");
+    else if (item.kind === "patch_nodes") for (const patch of item.payload.items) { if (isLeaseField(patch.field)) add(patch.nodeId, patch.field); }
+    else if (item.kind === "delete_nodes") for (const removal of item.payload.items) for (const field of LEASE_FIELDS) add(removal.nodeId, field);
+    else if (item.kind === "apply_generation") for (const field of Object.keys(item.payload.patch)) { if (isLeaseField(field)) add(item.payload.nodeId, field); }
+  }
+  return [...refs.values()];
+}
 
 const defaultAssetExists = (name: string) => isSafeAssetName(name) && existsSync(assetPath(name));
 export const commandHash = (command: Parameters<typeof canonicalCommand>[0]) => createHash("sha256").update(canonicalCommand(command)).digest("hex");
@@ -62,11 +79,12 @@ export async function executeCommand(input: unknown, context: CommandContext): P
     const hash = commandHash(command);
     const meta = { commandId: command.commandId, actorId: command.actorId, actorSeq: command.actorSeq, hash };
     const repository = context.repository ?? jsonCommandRepository;
+    const leases = context.leases ?? getLeaseService();
     outcome = await repository.transact<Outcome>(command.canvasId, (txn) => {
       const stored = txn.storedResult(command.commandId);
       if (stored) {
         if (stored.hash !== hash) return { error: new CommandError("command_id_reused", "该 commandId 已用于不同内容的命令") };
-        if (stored.error) return { error: new CommandError(stored.error.code, stored.error.message) };
+        if (stored.error) return { error: new CommandError(stored.error.code, stored.error.message, { fields: stored.error.fields }) };
         return { receipt: { ...structuredClone(stored.receipt!), replayed: true } };
       }
       if (command.storageEpoch !== txn.storageEpoch) return { error: new CommandError("stale_epoch", `存储纪元已变为 ${txn.storageEpoch}，请重新同步`) };
@@ -74,13 +92,21 @@ export async function executeCommand(input: unknown, context: CommandContext): P
       if (command.actorSeq !== accepted + 1) {
         return { error: new CommandError("actor_sequence_gap", command.actorSeq <= accepted ? `序号 ${command.actorSeq} 已被使用（已接受到 ${accepted}）` : `序号缺口：期望 ${accepted + 1}，收到 ${command.actorSeq}`) };
       }
+      // 租约在同一画布锁内核验：他人持有的字段返回 423，属于暂时性冲突，不占用序号。
+      const held = leases.conflicts(command.canvasId, touchedLeaseRefs(command), command.actorId);
+      if (held.length) {
+        return { error: new CommandError("lease_conflict", `${held.length} 个字段正被其他人编辑`, {
+          fields: held.map(lease => ({ path: `node/${lease.nodeId}/${lease.field}`, message: `正被其他人编辑，约 ${Math.max(0, lease.expiresAt - Date.now())}ms 后过期` })),
+          retryAfterMs: Math.max(0, Math.min(...held.map(lease => lease.expiresAt)) - Date.now()),
+        }) };
+      }
       try {
         const writes = reduceCommand(txn.reader, command, { assetExists: context.assetExists ?? defaultAssetExists });
         return { receipt: txn.commit(writes, meta) };
       } catch (error) {
         if (!(error instanceof ReducerError)) throw error;
-        txn.reject(meta, { code: error.code, message: error.message });
-        return { error: new CommandError(error.code, error.message) };
+        txn.reject(meta, { code: error.code, message: error.message, ...(error.fields.length ? { fields: error.fields } : {}) });
+        return { error: new CommandError(error.code, error.message, { fields: error.fields }) };
       }
     });
   } catch (error) {
