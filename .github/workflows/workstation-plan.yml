@@ -1,0 +1,51 @@
+name: Publish Workstation Issues
+
+on:
+  push:
+    branches: [feat/workstation-performance]
+    paths:
+      - docs/workstation-plan/**
+      - '!docs/workstation-plan/evidence/**'
+      - scripts/planning/**
+      - tests/workstation-plan.test.mjs
+      - .github/workflows/workstation-plan.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: workstation-issue-publisher
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'AIMFllyYS/grok-canvas' && github.ref == 'refs/heads/feat/workstation-performance'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.20.0
+      - name: Validate task graph and publication contracts
+        run: |
+          node scripts/planning/validate-plan.mjs
+          node --test tests/workstation-plan.test.mjs
+      - name: Publish parent, sub-issues and blocked-by relationships
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/planning/publish-issues.mjs --publish
+      - name: Upload published plan and resumable issue mapping
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workstation-plan-${{ github.sha }}
+          path: |
+            docs/workstation-plan/
+            artifacts/workstation-plan/
+          retention-days: 30
+          if-no-files-found: error

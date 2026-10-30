@@ -18,7 +18,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace && pnpm test:agent",
+    "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace && pnpm test:agent && pnpm test:planning",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "next dev -H 127.0.0.1 -p 3210",
     "build": "next build",
@@ -37,7 +37,10 @@
     "test:video": "node --experimental-strip-types --test tests/video-references.test.mjs tests/video-request.test.mjs tests/video-tasks.test.mjs tests/video-route.test.mjs tests/video-runtime.test.mjs",
     "test:security": "node --experimental-strip-types --test tests/local-access.test.mjs",
     "test:workspace": "node --test tests/workspace-preferences.test.mjs tests/account-display.test.mjs tests/canvas-interaction.test.mjs tests/canvas-performance.test.mjs tests/usage.test.mjs tests/canvas-library.test.mjs tests/canvas-references.test.mjs tests/canvas-store.test.mjs tests/canvas-operations.test.mjs tests/canvas-route.test.mjs tests/canvas-persistence.test.mjs tests/asset-upload.test.mjs tests/prompt-editor.test.mjs tests/asset-drag.test.mjs tests/desktop-runtime.test.mjs tests/desktop-bridge.test.mjs",
-    "test:agent": "node --test tests/agent.test.mjs tests/agent-sdk.test.mjs"
+    "test:agent": "node --test tests/agent.test.mjs tests/agent-sdk.test.mjs",
+    "test:planning": "node --test tests/workstation-plan.test.mjs",
+    "plan:validate": "node scripts/planning/validate-plan.mjs",
+    "plan:publish": "node scripts/planning/publish-issues.mjs"
   },
   "build": {
     "appId": "com.aimfllyys.grokcanvas",
