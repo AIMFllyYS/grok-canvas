@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,7 +9,8 @@ import ts from "typescript";
 const temporary = await mkdtemp(path.join(os.tmpdir(), "grok-video-route-"));
 after(() => rm(temporary, { recursive: true, force: true }));
 await writeFile(path.join(temporary, "package.json"), '{"type":"module"}');
-for (const name of ["data-dir", "assets", "prompt-references", "video-references", "video-request", "video-tasks", "video-generate"]) {
+await mkdir(path.join(temporary, "media"), { recursive: true });
+for (const name of ["data-dir", "assets", "prompt-references", "video-references", "video-request", "video-tasks", "video-generate", "media/asset-publication"]) {
   const source = await readFile(new URL(`../lib/${name}.ts`, import.meta.url), "utf8");
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },

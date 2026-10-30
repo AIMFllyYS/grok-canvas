@@ -2,7 +2,8 @@
 /**
  * DB 运行时探针（P3-02）：由被测运行时本身执行（系统 node、standalone 的 node、或 Electron 的
  * ELECTRON_RUN_AS_NODE 服务模式），只通过 Worker 协议（contracts.md C4）访问数据库：
- * health → 建表写入 → 事务回滚 → 关闭后重启读取 → VACUUM INTO 备份并读取备份。
+ * health → 建表写入 → 事务回滚 → 关闭后重启读取 → VACUUM INTO 备份并读取备份 →
+ * migrate → 正式 backup op（P3-07）→ verifyBackup → 还原到新目录并读取。
  * 用法：<runtime> scripts/db-runtime-probe.cjs <worker.cjs> <临时数据目录>
  * 输出一行 `DB_PROBE {json}`；任一步失败退出码 1。
  */
@@ -83,6 +84,17 @@ async function main() {
   try {
     steps.restartRead = await count(db);
     await db.request("maintenance", { action: "test.backup", params: { target: backup } });
+    // P3-07：正式备份协议（Backup API + manifest）→ 校验 → 还原到新目录，由被测运行时自己执行。
+    steps.migrate = await db.request("migrate");
+    const backupRoot = path.join(dataDir, "backups");
+    const made = await db.request("backup", { params: { dataDir, backupRoot, id: "probe-1" } });
+    const restore = require(path.join(path.dirname(workerPath), "restore.cjs"));
+    const verified = await restore.verifyBackup(made.dir);
+    const restored = await restore.restoreBackup({ backupDir: made.dir, targetDir: path.join(dataDir, "restored"), activeDataDir: path.join(dataDir, "active") });
+    steps.formalBackup = { status: made.status, verified: verified.ok, problems: verified.problems, restoredDb: path.basename(restored.dbFile) };
+    await db.close();
+    db = open(workerPath, restored.dbFile);
+    steps.formalBackup.restoredCount = await count(db);
     await db.close();
   } catch (error) {
     await db.terminate();
@@ -99,7 +111,8 @@ async function main() {
     throw error;
   }
 
-  const ok = health.ok && steps.write === 1 && steps.rollback.rejected && steps.rollback.count === 1 && steps.restartRead === 1 && steps.backup.count === 1;
+  const ok = health.ok && steps.write === 1 && steps.rollback.rejected && steps.rollback.count === 1 && steps.restartRead === 1 && steps.backup.count === 1
+    && steps.formalBackup.status === "complete" && steps.formalBackup.verified && steps.formalBackup.restoredCount === 1;
   return { ok, workerPath, health, steps };
 }
 
