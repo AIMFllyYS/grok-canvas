@@ -1,0 +1,51 @@
+{
+  "taskId": "P3-08",
+  "sourceCommit": "5e7baa355e97a5eefb6b261b5e1da87b68175470",
+  "status": "passed",
+  "baseCommit": "7ee01150",
+  "red": {
+    "command": "node --test tests/db-cutover.test.mjs",
+    "exitCode": 1,
+    "assertion": "cutover.cjs 为只抛“未实现”的桩、storage-mode.ts 恒报告 JSON 模式时，6 个切换/阻断测试全部失败（其余 SQLite 入口用例因切换未发生无法进入）。"
+  },
+  "checks": [
+    {"command": "node --test tests/db-cutover.test.mjs", "exitCode": 0, "evidence": "11/11（临时目录）：before_prepare/during_import/after_validate/before_marker 四个断点中断后无 storage-state、源 JSON hash 不变，重跑后恰好 SQLite 一个权威并退出维护；after_marker 中断后已是 SQLite，重跑只收尾（alreadySwitched）且拒绝回退；未确认客户端、unknown claim、pending 视频任务、坏画布 JSON 均 blocked 并给出处理选项、无标记、退出维护；切换后画布/正文/视口/完整素材库/旧 operation ID/最近画布/实体快照（纪元、revision、正文）来自 SQLite；新纪元命令成功、旧纪元 stale_epoch；业务写入后 jsonWriteAttempts 为空，强行调用旧 JSON 写函数被拒并计数，源 JSON hash 不变；旧 PUT 带正确 revision 转条件命令、过期 revision 不整图覆盖；operations 修改服务字段被拒；素材库变化 revision+1 且有连续事件；claims、Agent 会话、视频任务（新建/恢复/更新/旧任务可读）、生成来源（新旧）、画布新建/最近/删除全部只写 SQLite，旧目录无新文件；删除画布的命令 canvas_deleted；维护模式下新 claim 与新命令 423；标记损坏/DB 缺失 503 恢复不回退 JSON"},
+    {"command": "node --test tests/db-cutover.test.mjs tests/db-commands.test.mjs tests/canvas-commands.test.mjs tests/generation-commands.test.mjs tests/agent.test.mjs", "exitCode": 0, "evidence": "56/56：JSON 模式的命令/生成/Agent 套件未退化"},
+    {"command": "node scripts/db-runtime-smoke.mjs --target=node", "exitCode": 0, "evidence": "probe 与媒体 probe ok"},
+    {"command": "node scripts/db-runtime-smoke.mjs --target=standalone", "exitCode": 0, "evidence": "产物 db-runtime 含 sql-canvas.cjs 与 command-repository.cjs，server 启动 ok"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "合入 P4-02 后共 469 项"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "构建通过；tsconfig 副作用已还原"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "manual": {
+    "status": "passed",
+    "evidence": "由我在隔离数据目录（scratch 临时目录，非用户真实数据）用浏览器实测：standalone 产物以 JSON 权威启动 → 新建画布写 3 个文本节点 → 浏览器拖动 d1（geometryVersion 0→1）→ 停服务 → `workstation-cutover.mjs` preflight 正确报 clients 阻断 → `--execute --clients-drained` 提交（备份 complete，纪元 sqlite-2c0bab3a589d）→ 同目录重启 → 浏览器加载 3 个节点，纪元 json-v1→sqlite-…，d1 位置保留、revision 延续、正文来自 documents → 拖动 d2 经命令保存（geometryVersion 0→1）→ 刷新后位置 (450,0)→(333,215) 保留 → 旧纪元命令 409 stale_epoch → 无 5xx、无页面错误 → 旧 JSON 3 个文件 hash 前后一致 → `--rollback` 被拒绝。结果 JSON 与截图：docs/workstation-plan/evidence/P3-08-drill/（json 5/5，sqlite 11/11）。首轮演练发现 /entities 仍读旧 JSON 的 commandState（客户端拿到 json-v1 纪元，拖动被 stale_epoch 拒绝），已修为 SQLite 快照并补单测后复测通过。"
+  },
+  "entrypoints": {
+    "canvas-store": "loadCanvas/saveCanvas/updateCanvas/transformCanvas/listCanvases/createCanvas/deleteCanvas/load·saveLastCanvasId → SQLite（Worker）；commitCommandWrite/writeCanvas/writeLastCanvasId/deleteCanvas 的 JSON 分支由 assertJsonWritable 守卫",
+    "commands": "command-service 默认仓库在 SQLite 模式为 sqlCommandRepository；/entities（loadEntitySnapshot）与 changes 走 Worker",
+    "agent": "lib/agent/store.ts updateAgent → agentState.loadAgent/saveConversation（只写变化的会话）",
+    "videoTasks": "lib/video-tasks.ts write/read/list → tasks.putTaskRun / videoTasks.getTask / listTasks",
+    "generationClaims": "经 updateCanvas → canvasDoc.writeSide（generation_claims 表）",
+    "generationRecords": "lib/assets.ts save/readGenerationRecord → tasks.putGenerationRecord/getGenerationRecord",
+    "preferences": "lastCanvas、viewport:<id>、library:<id>、activeConversation:<id> → workspace_preferences"
+  },
+  "breakpointRecovery": {
+    "before_prepare": "无维护文件、无标记 → JSON 权威；重跑即可",
+    "during_import": "维护文件存在、staging 部分导入 → JSON 权威（服务端拒绝新写入）；重跑 reset 后完整导入",
+    "after_validate": "同上；重跑重新导入与校验",
+    "before_marker": "备份已完成、DB 未发布或已发布未标记 → JSON 权威；重跑复用已发布文件（存在则跳过复制）后写标记",
+    "after_marker": "标记已发布 → SQLite 权威；重跑只删除维护文件；不再导入也不回 JSON"
+  },
+  "operations": "1) 复制数据目录到隔离位置演练；2) `node scripts/workstation-cutover.mjs --data=<目录>` 只看阻断项；3) 关闭其它标签页确认保存后 `--execute --clients-drained`；4) 重启应用。失败时看输出 blockers；切换后不能回退到旧 JSON（--rollback 拒绝）。真实用户库切换需要用户再次明确授权，本 Issue 没有对真实数据运行。",
+  "act": "架构取舍：契约 C4 要求数据库只经 Worker，而 reducer 是 TS 运行在 Next 进程，所以采用“Worker 预取读集 + Next 内纯函数 reducer + Worker 乐观提交（revision/actorSeq/commandId 复核，冲突重跑）”，没有在主进程直连 SQLite。旧整图写入不做无条件覆盖：实体差异转为以读取快照版本为前置条件的命令。演练发现并修复 /entities 未切换的问题。",
+  "risks": [
+    "常态 2s 整图轮询仍在（P3-09 移除）；SQLite 模式下每次轮询是一次 Worker 整图读取。",
+    "旧 JSON 墓碑未导入（P3-06 报告），切换后被删除节点的旧 ID 理论上可被旧客户端重新添加；P3-10 处理墓碑与 legacy ID。",
+    "Agent 单个会话超过 Worker 单请求 4MiB 时保存失败并报错（不会静默截断）。",
+    "切换时打开着的旧标签页 outbox 进入 recovery_required（stale_epoch），由客户端恢复协调处理；未在浏览器中演练旧标签页存活跨切换的场景。"
+  ],
+  "next": "P3-09"
+}

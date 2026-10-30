@@ -1,0 +1,68 @@
+[
+  {
+    "phase": "sqlite",
+    "name": "画布在浏览器中加载",
+    "ok": true,
+    "detail": "节点 3"
+  },
+  {
+    "phase": "sqlite",
+    "name": "切换后存储纪元变为 SQLite",
+    "ok": true,
+    "detail": "json-v1 → sqlite-2c0bab3a589d"
+  },
+  {
+    "phase": "sqlite",
+    "name": "JSON 时期的拖动位置在 SQLite 中保留",
+    "ok": true,
+    "detail": "{\"x\":156,\"y\":88,\"width\":360,\"height\":260}"
+  },
+  {
+    "phase": "sqlite",
+    "name": "revision 延续",
+    "ok": true,
+    "detail": "2 → 2"
+  },
+  {
+    "phase": "sqlite",
+    "name": "正文从 documents 还原",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "phase": "sqlite",
+    "name": "SQLite 模式拖动经命令保存",
+    "ok": true,
+    "detail": "geometryVersion 0→1"
+  },
+  {
+    "phase": "sqlite",
+    "name": "刷新后位置仍是 SQLite 中的新位置（且确实移动过）",
+    "ok": true,
+    "detail": "{\"x\":450,\"y\":0,\"width\":360,\"height\":260} → {\"x\":333,\"y\":215,\"width\":360,\"height\":260}"
+  },
+  {
+    "phase": "sqlite",
+    "name": "旧纪元客户端命令被 stale_epoch 拒绝（不写入新库）",
+    "ok": true,
+    "detail": "status 409 stale_epoch"
+  },
+  {
+    "phase": "sqlite",
+    "name": "画布列表来自 SQLite",
+    "ok": true,
+    "detail": "status 200"
+  },
+  {
+    "phase": "sqlite",
+    "name": "无 5xx 响应",
+    "ok": true,
+    "detail": "[]"
+  },
+  {
+    "phase": "sqlite",
+    "name": "无页面错误",
+    "ok": true,
+    "detail": ""
+  }
+]
