@@ -13,7 +13,6 @@ import {
   addEdge,
   Background,
   BackgroundVariant,
-  ReactFlow,
   useEdgesState,
   useNodesState,
   useReactFlow,
@@ -35,6 +34,13 @@ import { assetsFromOutcome, collectCanvasAssets, mergeLibraryAssets, normalizeLi
 import { canvasSaveBody } from "@/lib/canvas-document";
 import { createChangeTracker, waitForGestureIdle, versionAfterCommit } from "@/lib/canvas-runtime/change-tracker";
 import { createGeometryJournal, restoreGeometry, type GeometryCheckpoint } from "@/lib/canvas-runtime/geometry-journal";
+import { createGestureStore, type GestureResult } from "@/lib/canvas-runtime/gesture-store";
+import { applyFlowGeometry, buildMoveItems, createConfirmedGeometry, displayGeometry, keepLocalGeometry, routeNodeChanges, withoutCommandGeometry, type ConfirmedGeometry, type ConfirmedSnapshot } from "@/lib/canvas-runtime/scene-adapter";
+import { createGeometryChannel, type GeometryChannel, type GeometryConflict, type ReconcileCandidate } from "@/lib/canvas-runtime/geometry-channel";
+import { openOutbox, type PostResult } from "@/lib/canvas-runtime/outbox";
+import type { HistoryEntry } from "@/lib/canvas-runtime/history";
+import type { CanvasCommand, Geometry } from "@/lib/canvas-runtime/types";
+import { CanvasScene } from "./canvas-scene";
 import { applyCanvasOperations, diffCanvasOperations, readCanvasOperationValue, type CanvasOperation } from "@/lib/canvas-operations";
 import { generationClaim } from "@/lib/generation-claim-client";
 import { canvasDraftKey, clearCanvasDraft, loadCanvasDraft, saveCanvasDraft, loadGeometryCheckpoints, saveGeometryCheckpoint } from "@/lib/canvas-drafts";
@@ -82,7 +88,6 @@ import { CanvasToolbar } from "./canvas-toolbar";
 import { CanvasEmptyState } from "./canvas-empty-state";
 import { CandidatePanel } from "./candidate-panel";
 import { PromptPanel } from "./prompt-panel";
-import { CanvasZoomStyle } from "./canvas-zoom-style";
 import { FloatingMenu, MenuItem as MenuButton } from "@/components/ui/floating-menu";
 import { ControlButton } from "@/components/ui/control-button";
 import { ScissorEdge } from "./scissor-edge";
@@ -215,7 +220,8 @@ type GenerateResponse = {
 type UndoEntry =
   | { type: "delete"; nodes: Node[]; edges: Edge[] }
   | { type: "add"; nodes: Node[]; edges: Edge[] }
-  | { type: "move"; items: Array<{ id: string; from: { x: number; y: number }; to: { x: number; y: number } }> }
+  // 几何走 P2-04 字段版本历史：commandId 指向已确认命令的 HistoryEntry，撤销/重做是新的条件命令。
+  | { type: "geometry"; commandId: string }
   | {
       type: "setPrimary";
       nodeId: string;
@@ -224,10 +230,32 @@ type UndoEntry =
     };
 
 function undoTargets(entry: UndoEntry): string[] {
-  if (entry.type === "move") return entry.items.map(item => `node:${item.id}`);
+  if (entry.type === "geometry") return [];
   if (entry.type === "setPrimary") return [`node:${entry.nodeId}`];
   return [...entry.nodes.map(node => `node:${node.id}`), ...entry.edges.map(edge => `edge:${edge.id}`)];
 }
+
+/** 领域命令入口（P2-03）；网络异常抛出，由 outbox 发送器按“结果不明”重发原 envelope。 */
+async function postCanvasCommand(command: CanvasCommand): Promise<PostResult> {
+  const response = await fetch(`/api/canvases/${encodeURIComponent(command.canvasId)}/commands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(command),
+  });
+  const body = await response.json().catch(() => ({})) as { receipt?: unknown; error?: { code?: string; message?: string; retryAfterMs?: number } };
+  if (response.ok && body.receipt) return { ok: true, receipt: body.receipt as Extract<PostResult, { ok: true }>["receipt"] };
+  return { ok: false, status: response.status, ...(body.error ? { error: body.error } : {}) };
+}
+
+async function fetchEntitySnapshot(canvasId: string): Promise<ConfirmedSnapshot> {
+  const response = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/entities?fields=geometry`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`读取画布版本失败（${response.status}）`);
+  return await response.json() as ConfirmedSnapshot;
+}
+
+const hasExplicitSize = (node: Node) => typeof node.width === "number" && typeof node.height === "number";
+const geometryPoint = (node: Node) => ({ x: node.position.x, y: node.position.y, ...(hasExplicitSize(node) ? { width: node.width!, height: node.height! } : {}) });
+const sameGeometryPoint = (a: ReturnType<typeof geometryPoint>, b: ReturnType<typeof geometryPoint>) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -304,6 +332,8 @@ export function FlowCanvas({
   const { loggedIn, refresh: refreshAuth } = useAuth();
   const [changes] = useState(createChangeTracker);
   const [geometry] = useState(() => createGeometryJournal());
+  // 正式工作文档：拖动/resize 途中不变；React Flow 看到的是 CanvasScene 的投影（正式文档 + 手势覆盖层）。
+  const [gesture] = useState(createGestureStore);
   const [nodes, setNodesFromSync, applyNodesChange] = useNodesState<Node>(doc.nodes as Node[]);
   const [edges, setEdgesFromSync, applyEdgesChange] = useEdgesState<Edge>(doc.edges as Edge[]);
   const setNodes = useCallback<typeof setNodesFromSync>((value) => {
@@ -314,10 +344,20 @@ export function FlowCanvas({
     changes.mutate(false);
     setEdgesFromSync(value);
   }, [changes, setEdgesFromSync]);
+  const commitGeometryRef = useRef<(result: GestureResult | null) => void>(() => {});
+  const replayGeometryRef = useRef<(entry: { type: "geometry"; commandId: string }, direction: "undo" | "redo") => void>(() => {});
+  const lookupGeometry = useCallback((id: string) => {
+    const node = latestRef.current.nodes.find(item => item.id === id);
+    return node ? displayGeometry(node) : undefined;
+  }, []);
   const onNodesChange = useCallback((items: NodeChange<Node>[]) => {
-    changes.nodes(items);
-    applyNodesChange(items);
-  }, [changes, applyNodesChange]);
+    // 拖动/resize 进行中只进覆盖层；选择、自然测量、增删进正式文档；松手后提交一条几何命令。
+    const routed = routeNodeChanges(items, gesture, lookupGeometry);
+    changes.nodes(routed.tracker);
+    if (routed.formal.length) applyNodesChange(routed.formal);
+    if (routed.discrete.length) commitGeometryRef.current({ kind: "drag", items: routed.discrete });
+    if (routed.finished) commitGeometryRef.current(gesture.end());
+  }, [changes, applyNodesChange, gesture, lookupGeometry]);
   const onEdgesChange = useCallback((items: EdgeChange<Edge>[]) => {
     changes.edges(items);
     applyEdgesChange(items);
@@ -394,6 +434,15 @@ export function FlowCanvas({
   const clipboardRef = useRef<{ nodes: Node[]; edges: Edge[] } | null>(null);
   // 拖拽在途：React Flow 的 onNodeDrag* 事件流还活着时，失焦不能让保存闸门提前打开。
   const dragRef = useRef({ active: false, at: 0 });
+  // 几何命令（P2-06）：确认版本缓存、命令通道、已确认命令的字段版本历史。恢复屏障完成后才有值。
+  const confirmedRef = useRef<ConfirmedGeometry | null>(null);
+  const channelRef = useRef<GeometryChannel | null>(null);
+  const historyRef = useRef(new Map<string, HistoryEntry>());
+  // 临时 legacy adapter（P2-06）：非几何业务动作仍经旧 operations 整图差异保存；
+  // 受命令管理节点（服务端已确认版本）的位置/尺寸改走 move_nodes，这里剥离，避免同一次手势双写。P2-07 删除。
+  const legacyAdapter = useMemo(() => ({
+    operations: (before: CanvasDoc, after: CanvasDoc) => withoutCommandGeometry(diffCanvasOperations(before, after), id => confirmedRef.current?.has(id) ?? false),
+  }), []);
 
   // 新建类操作入撤销栈（新建节点/上传/粘贴/连线）
   const pushAdd = useCallback((addedNodes: Node[], addedEdges: Edge[]) => {
@@ -445,13 +494,11 @@ export function FlowCanvas({
       }
     });
   }, [doc.id]);
-  const finishGeometry = useCallback((draggedNodes?: Node[]) => {
+  // 坐标日志只负责崩溃恢复检查点；撤销历史来自几何命令的回执（P2-04）。
+  const finishGeometry = useCallback((draggedNodes?: Node[] | Array<{ id: string; position: { x: number; y: number } }>) => {
     if (draggedNodes) geometry.update(draggedNodes);
-    const checkpoint = geometry.finish();
-    persistGeometry(checkpoint);
-    const items = checkpoint?.moves.filter(move => move.from.x !== move.to.x || move.from.y !== move.to.y) ?? [];
-    if (items.length) { pushUndo({ type: "move", items }); redoStackRef.current = []; }
-  }, [geometry, persistGeometry, pushUndo]);
+    persistGeometry(geometry.finish());
+  }, [geometry, persistGeometry]);
 
   // ---- 持久化：500ms 防抖自动保存 ----
   const save = useCallback(async () => {
@@ -474,7 +521,7 @@ export function FlowCanvas({
       let batch = inFlightOperationsRef.current ?? {
         base: acknowledgedRef.current,
         snapshot,
-        operations: diffCanvasOperations(acknowledgedRef.current, snapshot),
+        operations: legacyAdapter.operations(acknowledgedRef.current, snapshot),
       };
       if (batch.operations.length) {
         inFlightOperationsRef.current = batch;
@@ -530,12 +577,17 @@ export function FlowCanvas({
         }
         const current = canvasSaveBody(docRef.current, { viewport: viewportDirtyRef.current ? viewportRef.current : acknowledgedRef.current.viewport, nodes: latestRef.current.nodes, edges: latestRef.current.edges, libraryAssets: libraryRef.current });
         const currentCheckpointThrough = geometry.through();
-        const pending = diffCanvasOperations(batch.snapshot, current);
+        const pending = legacyAdapter.operations(batch.snapshot, current);
         dirtyVersion.current = versionAfterCommit(version, dirtyVersion.current, pending.length > 0);
         const reconciled = pending.length ? applyCanvasOperations(payload, pending) : payload;
+        // 已提交但未确认的移动不回弹；回执比这次响应更新时也保留本地（已确认）几何。
+        const confirmedNow = confirmedRef.current;
+        const newerLocal = !!confirmedNow && confirmedNow.revision() > payload.revision;
+        const localGeometry = (id: string) => !!channelRef.current?.isPending(id) || (newerLocal && !!confirmedNow?.has(id));
+        const reconciledNodes = keepLocalGeometry(reconciled.nodes as Node[], latestRef.current.nodes, localGeometry);
         const currentNodes = new Map(latestRef.current.nodes.map(node => [node.id, node]));
         const currentEdges = new Map(latestRef.current.edges.map(edge => [edge.id, edge]));
-        const mergedNodes = (reconciled.nodes as Node[]).map(node => {
+        const mergedNodes = reconciledNodes.map(node => {
           const previous = currentNodes.get(node.id);
           const claimId = typeof node.data.sourceNodeId === "string" ? node.data.sourceNodeId : node.id;
           const claim = payload.generationClaims?.[claimId];
@@ -563,6 +615,10 @@ export function FlowCanvas({
         else await saveCanvasDraft({ key: draftKeyRef.current, canvasId: doc.id, base: payload, working: current, pending: null, checkpointThrough: currentCheckpointThrough });
         if (!await waitForGestureIdle(changes, () => mounted.current)) return;
         checkpointFailedRef.current = false;
+        // 旧路径新增的节点进入服务端后，取一次版本，之后它们的移动也走命令。
+        if (confirmedNow && (payload.nodes as Node[]).some(node => !confirmedNow.has(node.id))) {
+          void fetchEntitySnapshot(doc.id).then(snapshot => { if (confirmedRef.current === confirmedNow) confirmedNow.load(snapshot); }).catch(() => {});
+        }
         const merged = mergeLibraryAssets(libraryRef.current, normalizeLibraryAssets(payload.libraryAssets));
         if (merged !== libraryRef.current && mounted.current) { libraryRef.current = merged; setLibraryAssets(merged); }
         reportSave({ ok: true });
@@ -584,7 +640,7 @@ export function FlowCanvas({
         saveTimerRef.current = setTimeout(() => void save(), 500);
       }
     }
-  }, [doc.id, changes, geometry, clearDraftTimer, setNodesFromSync, setEdgesFromSync]);
+  }, [doc.id, changes, geometry, legacyAdapter, clearDraftTimer, setNodesFromSync, setEdgesFromSync]);
 
   const scheduleSave = useCallback(() => {
     dirtyVersion.current++;
@@ -613,7 +669,9 @@ export function FlowCanvas({
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     await save();
-    return saveOkRef.current && !changes.active() && !changes.dirty() && dirtyVersion.current === savedVersion.current;
+    // 位置走命令通道：只有 outbox 中的移动都被确认才算已保存。
+    const geometrySaved = channelRef.current ? (await channelRef.current.flush()).saved : true;
+    return geometrySaved && saveOkRef.current && !changes.active() && !changes.dirty() && dirtyVersion.current === savedVersion.current;
   }, [save, changes]);
 
   useEffect(() => {
@@ -649,14 +707,54 @@ export function FlowCanvas({
           dirtyVersion.current++;
           toast.info("已恢复该画布的未保存修改");
         }
-        if (!cancelled) { draftReadyRef.current = true; setDraftReady(true); }
+        if (!cancelled) {
+          // ---- 恢复屏障（P2-06）：先登记 outbox 中未确认的移动，再把本地检查点/草稿坐标转成移动命令，最后才开放编辑。
+          const snapshot = await fetchEntitySnapshot(doc.id);
+          const outbox = await openOutbox();
+          if (cancelled) return;
+          const confirmed = createConfirmedGeometry(snapshot);
+          const channel = createGeometryChannel({
+            canvasId: doc.id,
+            outbox,
+            confirmed,
+            post: postCanvasCommand,
+            fetchSnapshot: () => fetchEntitySnapshot(doc.id),
+            onHistory: (commandId, entry) => { historyRef.current.set(commandId, entry); },
+            onConflict: conflict => geometryHandlersRef.current.conflict(conflict),
+            onRemote: geometries => geometryHandlersRef.current.remote(geometries),
+            onStatus: status => geometryHandlersRef.current.status(status),
+          });
+          await channel.start();
+          const baseNodes = new Map(((draft?.base ?? docRef.current).nodes as Node[]).map(node => [node.id, node]));
+          const candidates: ReconcileCandidate[] = [];
+          for (const node of latestRef.current.nodes) {
+            const before = baseNodes.get(node.id);
+            if (before && !sameGeometryPoint(geometryPoint(before), geometryPoint(node))) candidates.push({ id: node.id, from: geometryPoint(before), to: geometryPoint(node) });
+          }
+          if (candidates.length) await channel.reconcile(candidates, snapshot);
+          if (cancelled) { channel.dispose(); return; }
+          confirmedRef.current = confirmed;
+          channelRef.current = channel;
+          actorIdRef.current = outbox.actorId;
+          void channel.flush();
+          draftReadyRef.current = true;
+          setDraftReady(true);
+        }
       } catch (error) {
         if (!cancelled) reportSave({ ok: false, message: `本地恢复失败，已暂停编辑：${error instanceof Error ? error.message : "请刷新重试"}` });
       }
     };
     void restore();
-    return () => { cancelled = true; draftReadyRef.current = false; };
-  }, [doc.id, changes, geometry, setNodesFromSync, setEdgesFromSync, setViewport]);
+    return () => {
+      cancelled = true;
+      draftReadyRef.current = false;
+      // 卸载/切换画布：进行中的手势按最后坐标提交（入队后由下次打开时发送），再停掉通道。
+      if (gesture.active()) commitGeometryRef.current(gesture.end());
+      channelRef.current?.dispose();
+      channelRef.current = null;
+      confirmedRef.current = null;
+    };
+  }, [doc.id, changes, geometry, gesture, setNodesFromSync, setEdgesFromSync, setViewport]);
 
   // Pull remote changes without remounting the canvas or interrupting a gesture.
   useEffect(() => {
@@ -675,13 +773,16 @@ export function FlowCanvas({
   useEffect(() => {
     mounted.current = true;
     const warn = (event: BeforeUnloadEvent) => {
-      if (pendingUploads.current.size || changes.dirty() || dirtyVersion.current !== savedVersion.current) { event.preventDefault(); event.returnValue = ""; }
+      if (pendingUploads.current.size || changes.dirty() || dirtyVersion.current !== savedVersion.current || (channelRef.current?.pendingGeometry().size ?? 0) > 0) { event.preventDefault(); event.returnValue = ""; }
     };
     const dragInFlight = () => dragRef.current.active && performance.now() - dragRef.current.at < DRAG_STALE_MS;
-    // 真正收尾一次拖拽：坐标日志保留到起点，可整段撤销；同时打开保存闸门。
+    // 覆盖层里的当前坐标：正式文档在手势途中仍是起点。
+    const gestureNodes = () => gesture.participants().flatMap(id => { const at = gesture.get(id); return at ? [{ id, position: { x: at.x, y: at.y } }] : []; });
+    // 真正收尾一次拖拽：坐标日志落最终检查点，手势按覆盖层最后坐标提交一条命令，同时打开保存闸门。
     const closeDragGesture = () => {
       dragRef.current.active = false;
-      finishGeometry(latestRef.current.nodes);
+      finishGeometry(gestureNodes());
+      commitGeometryRef.current(gesture.end());
       changes.reset();
       setDragging(false);
       setNodesFromSync(current => current.map(node => node.dragging || node.resizing ? { ...node, dragging: false, resizing: false } : node));
@@ -692,7 +793,7 @@ export function FlowCanvas({
       // 指针还按在节点上（事件仍在流）：只落检查点、保留手势闸门，
       // 否则 500ms 防抖保存会把拖拽中途的坐标当成一次完整移动写进服务端。
       if (dragInFlight()) {
-        persistGeometry(geometry.suspend(latestRef.current.nodes));
+        persistGeometry(geometry.suspend(gestureNodes()));
         return;
       }
       closeDragGesture();
@@ -722,7 +823,7 @@ export function FlowCanvas({
         saveTimerRef.current = null;
       }
     };
-  }, [changes, clearDraftTimer, finishGeometry, geometry, latestRef, persistGeometry, setNodesFromSync]);
+  }, [changes, clearDraftTimer, finishGeometry, geometry, gesture, latestRef, persistGeometry, setNodesFromSync]);
 
   const registerAssets = useCallback((items: CanvasLibraryAsset[]) => {
     const next = mergeLibraryAssets(libraryRef.current, items);
@@ -1450,12 +1551,14 @@ export function FlowCanvas({
       );
       pushUndo({ type: "delete", nodes: removedNodes, edges: removedEdges });
       redoStackRef.current = [];
+      // 删除节点同时清掉它的手势锁，不留下指向已删节点的覆盖层。
+      for (const id of nodeIds) gesture.drop(id);
       setNodes((current) => current.filter((node) => !nodeIds.includes(node.id)));
       setEdges((current) =>
         current.filter((edge) => !nodeIds.includes(edge.source) && !nodeIds.includes(edge.target)),
       );
     },
-    [setNodes, setEdges, pushUndo],
+    [setNodes, setEdges, pushUndo, gesture],
   );
 
   // ---- 复制 / 粘贴 / 副本（内部剪贴板，跨画布不共享）----
@@ -1592,6 +1695,7 @@ export function FlowCanvas({
     if (!entry) {
       return;
     }
+    if (entry.type === "geometry") { replayGeometryRef.current(entry, "undo"); return; }
     if (!undoStillValid(entry)) { undoStackRef.current.push(entry); toast.error("节点已被其他操作修改，无法安全撤销"); return; }
     redoStackRef.current.push(entry);
     if (entry.type === "delete") {
@@ -1621,13 +1725,6 @@ export function FlowCanvas({
       );
     } else if (entry.type === "setPrimary") {
       updateNodeData(entry.nodeId, entry.prev);
-    } else {
-      setNodes((current) =>
-        current.map((node) => {
-          const item = entry.items.find((candidate) => candidate.id === node.id);
-          return item ? { ...node, position: item.from } : node;
-        }),
-      );
     }
   }, [doc.id, setNodes, setEdges, updateNodeData]);
 
@@ -1636,6 +1733,7 @@ export function FlowCanvas({
     if (!entry) {
       return;
     }
+    if (entry.type === "geometry") { replayGeometryRef.current(entry, "redo"); return; }
     if (!undoStillValid(entry)) { redoStackRef.current.push(entry); toast.error("节点已被其他操作修改，无法安全重做"); return; }
     undoStackRef.current.push(entry);
     if (entry.type === "delete") {
@@ -1648,13 +1746,6 @@ export function FlowCanvas({
       setEdges((current) => [...current, ...entry.edges]);
     } else if (entry.type === "setPrimary") {
       updateNodeData(entry.nodeId, entry.next);
-    } else {
-      setNodes((current) =>
-        current.map((node) => {
-          const item = entry.items.find((candidate) => candidate.id === node.id);
-          return item ? { ...node, position: item.to } : node;
-        }),
-      );
     }
   }, [setNodes, setEdges, updateNodeData]);
 
@@ -1739,6 +1830,109 @@ export function FlowCanvas({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [desktopAvailable, closeCandidates, copyNodes, deleteSelection, duplicateNodes, pasteClipboard, redo, setNodesFromSync, undo, zoomIn, zoomOut, zoomTo]);
 
+  // ---- 几何命令接线（P2-06）：手势结束 → move_nodes → outbox → 回执；撤销/重做是条件命令 ----
+  const actorIdRef = useRef<string | null>(null);
+  const applyGeometries = useCallback((geometries: Map<string, Geometry>) => {
+    if (!geometries.size) return;
+    setNodesFromSync(current => current.map(node => {
+      const target = geometries.get(node.id);
+      return target ? applyFlowGeometry(node, target, { size: hasExplicitSize(node) }) : node;
+    }));
+  }, [setNodesFromSync]);
+  const geometryHandlersRef = useRef({
+    conflict: (_conflict: GeometryConflict) => {},
+    remote: (_geometries: Map<string, Geometry>) => {},
+    status: (_status: { state: string; message?: string }) => {},
+  });
+  geometryHandlersRef.current = {
+    // 同几何冲突：画面保留用户的位置，由用户选择，不静默选边。
+    conflict: (conflict) => {
+      toast.warning(`${conflict.nodeIds.length} 个节点的位置已被其他修改改变`, {
+        description: "画面上先保留你的位置。请选择保留哪一方。",
+        duration: Infinity,
+        dismissible: false,
+        action: { label: "保留我的位置", onClick: () => { void conflict.keepMine(); } },
+        cancel: { label: "采用对方位置", onClick: () => { void conflict.takeTheirs(); } },
+      });
+    },
+    remote: applyGeometries,
+    status: (status) => { if (status.state === "error") reportSave({ ok: false, message: status.message ?? "位置同步失败" }); },
+  };
+  const commitGeometry = useCallback((result: GestureResult | null) => {
+    if (!result) return;
+    const size = result.kind === "resize";
+    const finals = new Map(result.items.map(item => [item.id, item.to]));
+    setNodesFromSync(current => current.map(node => {
+      const target = finals.get(node.id);
+      return target ? applyFlowGeometry({ ...node, dragging: false, resizing: false }, target, { size }) : node;
+    }));
+    const confirmed = confirmedRef.current, channel = channelRef.current;
+    const { items, unmanaged } = confirmed ? buildMoveItems(result, confirmed) : { items: [], unmanaged: result.items.map(item => item.id) };
+    // 服务端还不认识的节点（尚未保存的新节点）：几何随旧保存的新增操作一起写入。
+    if (unmanaged.length) changes.mutate(false);
+    if (!items.length || !channel) return;
+    void channel.submit(items).then(submitted => {
+      if (!submitted) return;
+      const top = undoStackRef.current.at(-1);
+      // 与队尾未发送的移动合并时沿用同一条命令，只记一次历史。
+      if (!(top?.type === "geometry" && top.commandId === submitted.commandId)) pushUndo({ type: "geometry", commandId: submitted.commandId });
+      redoStackRef.current = [];
+      return channel.flush();
+    }).catch(error => reportSave({ ok: false, message: `位置保存失败：${error instanceof Error ? error.message : "请重试"}` }));
+  }, [changes, pushUndo, setNodesFromSync]);
+  commitGeometryRef.current = commitGeometry;
+  const replayGeometry = useCallback((entry: Extract<UndoEntry, { type: "geometry" }>, direction: "undo" | "redo") => {
+    const source = direction === "undo" ? undoStackRef : redoStackRef;
+    const sink = direction === "undo" ? redoStackRef : undoStackRef;
+    const label = direction === "undo" ? "撤销" : "重做";
+    const history = historyRef.current.get(entry.commandId), channel = channelRef.current;
+    if (!history || !channel) { source.current.push(entry); toast.info(`位置仍在保存，请稍后再${label}`); return; }
+    void channel.undo(history).then(result => {
+      if (!result.ok) { source.current.push(entry); toast.error(`节点已被其他操作修改，无法安全${label}`); return; }
+      applyGeometries(result.geometries);
+      sink.current.push({ type: "geometry", commandId: result.commandId });
+      return channel.flush();
+    }).catch(() => { source.current.push(entry); toast.error(`位置${label}失败，请重试`); });
+  }, [applyGeometries]);
+  replayGeometryRef.current = replayGeometry;
+
+  // 拖动期间给参与节点加 geometry 租约（owner = outbox actorId，自己的命令不被挡），结束/隐藏/卸载即释放。
+  useEffect(() => {
+    let lease: { owner: string; tokens: Record<string, string>; timer: number } | null = null;
+    let claiming = false;
+    const call = (body: Record<string, unknown>, keepalive = false) => fetch(`/api/canvases/${encodeURIComponent(doc.id)}/edit-lease`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), keepalive,
+    });
+    const release = () => {
+      const held = lease;
+      lease = null;
+      if (!held) return;
+      window.clearInterval(held.timer);
+      void call({ nodeIds: Object.keys(held.tokens), field: "geometry", owner: held.owner, action: "release", tokens: held.tokens }, true).catch(() => {});
+    };
+    const sync = () => {
+      if (!gesture.active()) { release(); return; }
+      const owner = actorIdRef.current;
+      if (lease || claiming || !owner) return;
+      claiming = true;
+      void call({ nodeIds: gesture.participants().slice(0, 500), field: "geometry", owner, action: "claim" })
+        .then(response => response.ok ? response.json() as Promise<{ tokens?: Record<string, string> }> : null)
+        .then(body => {
+          claiming = false;
+          if (!body?.tokens) return;
+          const timer = window.setInterval(() => {
+            if (lease) void call({ nodeIds: Object.keys(lease.tokens), field: "geometry", owner, action: "renew", tokens: lease.tokens }).catch(() => {});
+          }, 1000);
+          lease = { owner, tokens: body.tokens, timer };
+          if (!gesture.active()) release();
+        })
+        .catch(() => { claiming = false; });
+    };
+    const unsubscribe = gesture.subscribe(sync);
+    window.addEventListener("pagehide", release);
+    return () => { unsubscribe(); window.removeEventListener("pagehide", release); release(); };
+  }, [doc.id, gesture]);
+
   // ---- 移动（拖动结束记一次撤销）----
   const onNodeDragStart = useCallback((_event: unknown, _node: Node, draggedNodes: Node[]) => {
     dragRef.current = { active: true, at: performance.now() };
@@ -1762,9 +1956,12 @@ export function FlowCanvas({
   const onNodeDragStop = useCallback((_event: unknown, _node: Node, draggedNodes: Node[]) => {
     dragRef.current.active = false;
     finishGeometry(draggedNodes);
+    // 用最后一次回调坐标收尾；onNodesChange 已收尾时 end() 返回 null，不会重复提交。
+    gesture.update(draggedNodes.map(node => ({ id: node.id, x: node.position.x, y: node.position.y })));
+    commitGeometry(gesture.end());
     changes.end("node");
     setDragging(false);
-  }, [finishGeometry, changes]);
+  }, [finishGeometry, changes, commitGeometry, gesture]);
 
   // ---- 设为主图（可撤销）：assetName 始终跟随主图槽 ----
   const setPrimaryResult = useCallback(
@@ -1899,8 +2096,9 @@ export function FlowCanvas({
           }
         }}
       >
-        <ReactFlow
+        <CanvasScene
           nodes={nodes}
+          gesture={gesture}
           edges={edges}
           nodeTypes={nodeTypes}
           onNodesChange={onNodesChange}
@@ -1958,11 +2156,10 @@ export function FlowCanvas({
           }}
           proOptions={{ hideAttribution: true }}
         >
-          <CanvasZoomStyle />
           <Background variant={BackgroundVariant.Dots} gap={24} size={1} />
           <PromptPanel />
           <CandidatePanel />
-        </ReactFlow>
+        </CanvasScene>
 
         {nodes.length === 0 ? (
           <CanvasEmptyState
