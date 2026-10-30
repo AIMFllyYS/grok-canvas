@@ -1,0 +1,39 @@
+{
+  "taskId": "P3-02",
+  "sourceCommit": "4f6c531c4d858fb5c3dee8b8064fecc04ffb7c31",
+  "status": "passed",
+  "baseCommit": "b82b4d60",
+  "red": {
+    "command": "node --test tests/db-packaging.test.mjs",
+    "exitCode": 1,
+    "assertion": "build-root.mjs / db-runtime.mjs 为只抛“未实现”的桩，db-runtime-probe.cjs、desktop.readDesktopManifest、service.resolveDbWorkerPath 尚不存在，CI 与 package.json 未改：13/13 全部失败（未实现、Missing expected exception、is not a function、CI 缺 db-runtime-smoke --target=node 等）。traceExcludes 回归测试是 Check 阶段发现 500 后补写的，见 act。"
+  },
+  "checks": [
+    {"command": "node --test tests/db-packaging.test.mjs", "exitCode": 0, "evidence": "15/15：buildRoot 解析与拒绝、standalone 来源一致性、traceExcludes（用 Next 自带 picomatch 复现旧模式根因）、db-runtime 白名单与哈希复核、重复 staging 不复用、probe 正例、错误平台 native 反例、缺 worker 立即失败、worker 路径解析、包审计（凭据/数据库/媒体/用户目录路径/包外链接）、desktop-runtime.json 读取与非法值拒绝、npmRebuild=false 与脚本约束、CI 三端步骤"},
+    {"command": "node scripts/db-runtime-smoke.mjs --target=node", "exitCode": 0, "evidence": "系统 node v24.20.0、modules 137、napi 10；worker=<repo>/lib/db/worker.cjs；native=pnpm store 中 prebuilds/win32-x64.node；SQLite 3.53.4；建表写入 1、回滚后仍为 1、重启读取 1、VACUUM INTO 备份读取 1；反例：缺 driver.cjs、缺 worker.cjs、换成 darwin-arm64.node 均退出码 1 并给出明确错误"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-db-smoke-build)", "exitCode": 0, "evidence": "next build 后 stage-standalone 写入 public/static 与 db-runtime（28 个文件，win32-x64）；standalone/server/chunks/ssr 有 35 个 chunk（修正前为 0）"},
+    {"command": "node scripts/db-runtime-smoke.mjs --target=standalone (GROK_CANVAS_BUILD_DIR=.tmp-db-smoke-build)", "exitCode": 0, "evidence": "probe 加载 standalone/db-runtime 内的 native 与 worker，五步全过；从产物启动 server.js，GET / 返回 200（769ms 就绪）；三个反例均明确失败；审计 2273 个文件无凭据/数据库/媒体/用户目录路径"},
+    {"command": "pnpm build + node scripts/db-runtime-smoke.mjs --target=standalone (默认 .next)", "exitCode": 0, "evidence": "默认 distDir 同样通过：GET / 200（764ms），tsconfig.json 未被改写"},
+    {"command": "pnpm desktop:prepare && pnpm desktop:deps && pnpm desktop:finish (GROK_CANVAS_BUILD_DIR=.tmp-db-smoke-build)", "exitCode": 0, "evidence": "prepare 校验 standalone distDir/BUILD_ID 后写 desktop-runtime.json；deps 仍为 --ignore-scripts 平铺安装（536 包，9.3s）；finish 复核 BUILD_ID 与 db-runtime 哈希，删除 pnpm 元数据与重复的 better-sqlite3/node-addon-api，审计 35878 个文件 forbidden=0；包内 better-sqlite3 native 只有 db-runtime 里 1 个"},
+    {"command": "node scripts/db-runtime-smoke.mjs --target=electron (GROK_CANVAS_BUILD_DIR=.tmp-db-smoke-build)", "exitCode": 0, "evidence": "execPath=<repo>/node_modules/electron/dist/electron.exe，ELECTRON_RUN_AS_NODE=1（与 desktop/main.cjs 相同的 serverEnvironment）；electron 45.0.0、node v24.22.0、modules 150（≠系统 node 137）、napi 10；native=.desktop/app/db-runtime/.../win32-x64.node；SQLite 3.53.4；PRAGMA wal/2/1/2000；五步全过；包内 server.js 经 Electron 启动，GET / 200（827ms）；三个反例在 Electron 下同样明确失败（modules 150）"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误（next.config.ts 通过 scripts/build-root.d.mts 取类型）"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "10 个套件共 354 项（新增 db-packaging 15 项；test:db 现为 21+15）"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "decision": {
+    "native": "better-sqlite3 13.0.3 的 prebuild 基于 Node-API。Electron 45 用 electron.exe 实测（modules 150，napi 10）直接加载 win32-x64.node，不需要按 Electron ABI 重编译。Node 与 Electron 的 db-runtime 分别 staging（<distDir>/standalone/db-runtime 与 .desktop/app/db-runtime），互不覆盖。",
+    "lifecycle": "依赖脚本仍全部关闭：CI 只显式运行 node node_modules/electron/install.js 下载 Electron 二进制；electron-builder 设 npmRebuild=false，避免对 better-sqlite3 自动跑 node-gyp。",
+    "workerPath": "GROK_CANVAS_DB_WORKER（Electron 主进程按 desktop-runtime.json 注入）→ <cwd>/db-runtime/lib/db/worker.cjs（standalone server.js 会 chdir 到自身目录）→ <cwd>/lib/db/worker.cjs（Node 开发）。文件不存在时 getDbService 立即抛 storage_unavailable，不登记单例。",
+    "tracing": "Next/Turbopack 对 outputFileTracingExcludes 用 picomatch contains 匹配，模式在路径任意位置命中。旧列表中 ./.tmp-* 吃掉 .tmp-* 隔离构建自己的全部 server chunk，./build/** 吃掉 161 个 next/dist/build 文件（包括所有 *build* 命名的 distDir 的 chunk），./components/** 吃掉 75 个 next/dist/client/components 文件。改为文件类型或确切文件模式，其他构建目录按名字列出，且从不排除当前 distDir。"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P3-02 manual=false；三端都由脚本实测，没有 UI 签收项"},
+  "act": "Check 发现并修正 3 个问题，均已复验：(1) 隔离 distDir 的 standalone 缺全部 server chunk，GET / 500（Cannot find module ../chunks/ssr/[turbopack]_runtime.js）。这是既有问题，protocol.md 规定的隔离构建一直只检查构建退出码，没有运行过 standalone。用无排除构建对照、对 32 个 trace 的 1764 个文件逐模式比对后定位到 contains 匹配，修正后 standalone 有 35 个 chunk、返回 200，并补了回归测试。(2) smoke 第一次得到 403：本机访问守卫按 GROK_CANVAS_PORT 校验 Host，smoke 改为与监听端口一致，并要求 2xx/3xx 才算通过。(3) Windows 下 Next standalone 的 node_modules 是指回仓库 store 的 junction（77 个）：standalone 只在构建机运行，报告里记数，不判失败；分发的 .desktop/app 由 desktop:deps 平铺安装，electron 目标对任何包外链接都判失败（实测 0）。另外修正 driver.nativeBindingPath 的查找顺序，与 better-sqlite3 binding.js 一致（prebuilds 优先）。没有签名，没有发布安装包或 Release，没有迁移用户数据。",
+  "risks": [
+    "Next 把构建机项目路径固化在 standalone 的 server.js / required-server-files.json（outputFileTracingRoot）。审计会先剔除项目路径再查用户目录；这是 Next 的行为，不是用户数据路径。",
+    "test.backup 只是 VACUUM INTO 的能力验证，限定在数据库同目录、仅测试 repository 可用；正式备份 op 和进度归 P3-07。",
+    "排除列表里的 ./scripts/**/*.mjs、./tests/**/*.mjs、./docs/**/*.md|json 仍按 contains 命中依赖包里同名目录的文件；当前 1764 个追踪文件中命中 0 个，standalone/Electron 的 HTTP 启动 smoke 是端到端兜底。",
+    "Electron 在 CI 只验证 Windows x64；macOS/Linux 桌面包不在本项目发布范围。"
+  ],
+  "next": "P2-06"
+}
