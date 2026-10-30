@@ -8,7 +8,7 @@ export type DbOp = (typeof DB_OPS)[number];
 export type DbRequest = { requestId: string; op: DbOp; args: unknown };
 export type DbErrorCode =
   | "queue_full" | "request_too_large" | "timeout" | "worker_exited" | "closed"
-  | "invalid_request" | "unknown_op" | "unknown_repository" | "constraint" | "storage_unavailable";
+  | "invalid_request" | "unknown_op" | "unknown_repository" | "constraint" | "storage_unavailable" | "not_found";
 export type DbResponse =
   | { requestId: string; ok: true; result: unknown }
   | { requestId: string; ok: false; error: { code: DbErrorCode; message: string } };

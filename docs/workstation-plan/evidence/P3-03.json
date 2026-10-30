@@ -1,0 +1,31 @@
+{
+  "taskId": "P3-03",
+  "sourceCommit": "cc78f470919ee63dda9a258770a7f01653c3b29a",
+  "status": "passed",
+  "baseCommit": "50a7f67d",
+  "red": {
+    "command": "node --test tests/db-core.test.mjs",
+    "exitCode": 1,
+    "assertion": "migrate.cjs、repositories/canvas.cjs、repositories/assets.cjs 为只抛“未实现”的桩、001-core.sql 不存在时 8/8 失败。"
+  },
+  "checks": [
+    {"command": "node --test tests/db-core.test.mjs", "exitCode": 0, "evidence": "8/8（真实临时 SQLite 3.53.4）：迁移记录 version+checksum、重复迁移无副作用、默认项目；已应用文件内容变化 schema_checksum、未来版本 schema_future、失败迁移整体回滚不留半张表也不留记录；两画布相同 nodeId 可共存、跨画布连线外键失败、同画布 ID 唯一、尺寸/类型/json_valid CHECK；10000 节点×100KB 正文读几何只选几何列、摘要不读正文、EXPLAIN QUERY PLAN 命中主键/edges_source/edges_target 索引；137 节点分页稳定不重复、每页 ≤256KiB、limit 51 → invalid_request、正文按 16000 字符分块、跨画布读文档 not_found；缺 canvasId 拒绝、别的画布同 ID 不可见、墓碑节点不在列表但保留边与正文供恢复；assets 与 canvas_assets 分离、同一物理文件归属各自独立、未登记素材外键失败；Worker migrate op 与固定 repository 派发，SQL 文本当 repository 名返回 unknown_repository"},
+    {"command": "node --test tests/db-worker.test.mjs tests/db-packaging.test.mjs", "exitCode": 0, "evidence": "P3-01/P3-02 套件未退化；db-runtime staging 增加 migrate.cjs、repositories/*.cjs、migrations/*.sql 白名单"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "10 个套件共 392 项"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "handoff": {
+    "tables": "projects、canvases(project_id,updated_at 索引)、nodes(PK canvas_id+id；nodes_type)、documents(PK canvas_id+id，UNIQUE canvas_id+node_id，FK 节点)、node_fields(PK canvas_id+node_id+field)、edges(PK canvas_id+id；复合 FK 端点同画布；edges_source/edges_target)、assets(asset_name PK；assets_sha256)、canvas_assets(PK canvas_id+asset_name；canvas_assets_asset)、asset_derivatives(PK asset_name+variant+source_hash)、schema_migrations",
+    "repositories": "canvas.cjs：listCanvases/listGeometry/listNodeSummaries/getNodes/getDocumentChunk/listEdges/edgesOf/putCanvas/tombstoneNode/getTombstone（参数 {canvasId, cursor, limit≤50}，返回 {items, nextCursor}）；assets.cjs：putAsset/linkCanvasAsset/listCanvasAssets/canvasHasAsset；Worker 名称 canvas.* / assets.*，无任意 SQL 入口",
+    "migrations": "lib/db/migrations/NNN-name.sql；checksum 前把 CRLF 归一为 LF，Windows 检出与 Linux 一致；升级只能新增文件"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P3-03 manual=false；只验证合成数据，旧数据导入在 P3-06"},
+  "act": "首轮即全部通过。设计取舍：documents 对 nodes 用复合外键、nodes.document_id 不反向约束，避免循环外键（同事务先插节点再插正文）；STRICT 表让类型错误在写入时失败；迁移 checksum 计算前统一换行符，否则 Windows 的 autocrlf 检出会让同一文件在不同机器 checksum 不同而拒绝启动。没有切换 canvas-store 权威，业务仍走 JSON。",
+  "risks": [
+    "putCanvas 只用于合成数据/导入；普通命令的 SQL 写入（只写几何、回执/事件同事务）在 P3-05。",
+    "repository 的字节上限按 JSON 序列化估算，单个超大节点仍会独占一页（至少返回 1 条），长文须走 getDocumentChunk。"
+  ],
+  "next": "P3-04"
+}
