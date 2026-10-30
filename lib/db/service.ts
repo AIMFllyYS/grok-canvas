@@ -7,7 +7,7 @@
  * 服务端私有模块，浏览器不得导入。
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { dataDir } from "../data-dir";
@@ -15,10 +15,21 @@ import { DB_LIMITS, DB_OPS, DbError, type DbHealth, type DbLimits, type DbOp, ty
 
 export { DbError } from "./protocol";
 
+/**
+ * Worker 入口解析（P3-02）：GROK_CANVAS_DB_WORKER（Electron 主进程注入）→ <cwd>/db-runtime/lib/db/worker.cjs
+ * （standalone 产物，server.js 会 chdir 到自身目录）→ <cwd>/lib/db/worker.cjs（Node 开发）。
+ */
+export function resolveDbWorkerPath(cwd: string = process.cwd()): string {
+  const configured = process.env.GROK_CANVAS_DB_WORKER;
+  if (configured) return path.resolve(configured);
+  const packaged = path.join(cwd, "db-runtime", "lib", "db", "worker.cjs");
+  return existsSync(packaged) ? packaged : path.join(cwd, "lib", "db", "worker.cjs");
+}
+
 export type DbServiceOptions = {
   /** 数据库文件；默认 <dataDir>/grok-canvas.sqlite。 */
   file?: string;
-  /** worker.cjs 路径；默认 GROK_CANVAS_DB_WORKER 或 <cwd>/lib/db/worker.cjs（打包路径由 P3-02 统一）。 */
+  /** worker.cjs 路径；默认见 resolveDbWorkerPath。文件不存在时立即以 storage_unavailable 失败。 */
   workerPath?: string;
   /** 仅测试：开启 worker 内的测试 repository。 */
   enableTestRepository?: boolean;
@@ -40,7 +51,8 @@ const MAINTENANCE: ReadonlySet<DbOp> = new Set(["migrate", "backup", "maintenanc
 
 function createDbService(key: string, file: string, options: DbServiceOptions, onClosed: () => void) {
   const limits: DbLimits = { ...DB_LIMITS, ...options.limits };
-  const workerPath = path.resolve(options.workerPath ?? process.env.GROK_CANVAS_DB_WORKER ?? path.join(process.cwd(), "lib", "db", "worker.cjs"));
+  const workerPath = path.resolve(options.workerPath ?? resolveDbWorkerPath());
+  if (!existsSync(workerPath)) throw new DbError("storage_unavailable", `缺少 DB Worker：${workerPath}。打包产物须包含 db-runtime，或设置 GROK_CANVAS_DB_WORKER`);
   const pending = new Map<string, Pending>();
   let queuedBytes = 0;
   let state: DbServiceState = "starting";

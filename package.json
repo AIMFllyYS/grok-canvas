@@ -21,7 +21,7 @@
     "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace && pnpm test:agent && pnpm test:commands && pnpm test:db && pnpm test:planning",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "next dev -H 127.0.0.1 -p 3210",
-    "build": "next build",
+    "build": "next build && node scripts/stage-standalone.mjs",
     "start": "node scripts/start-production.mjs",
     "desktop:dev": "concurrently -k -s first -n next,electron \"pnpm dev\" \"wait-on http://127.0.0.1:3210 && electron . --dev\"",
     "desktop:prepare": "node scripts/prepare-desktop.mjs",
@@ -40,7 +40,8 @@
     "test:agent": "node --test tests/agent.test.mjs tests/agent-sdk.test.mjs",
     "test:commands": "node --test tests/command-schema.test.mjs tests/canvas-entity-store.test.mjs tests/canvas-commands.test.mjs tests/canvas-history-leases.test.mjs tests/canvas-outbox.test.mjs",
     "test:planning": "node --test tests/workstation-plan.test.mjs",
-    "test:db": "node --test tests/db-worker.test.mjs",
+    "test:db": "node --test tests/db-worker.test.mjs tests/db-packaging.test.mjs",
+    "db:smoke": "node scripts/db-runtime-smoke.mjs",
     "plan:validate": "node scripts/planning/validate-plan.mjs",
     "plan:publish": "node scripts/planning/publish-issues.mjs"
   },
@@ -48,6 +49,7 @@
     "appId": "com.aimfllyys.grokcanvas",
     "productName": "Grok Canvas",
     "asar": true,
+    "npmRebuild": false,
     "directories": {
       "output": "release",
       "buildResources": "build"

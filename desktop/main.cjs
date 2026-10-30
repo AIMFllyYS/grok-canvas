@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   LOCAL_ORIGIN,
+  readDesktopManifest,
   serverLaunch,
   serverEnvironment,
   externalHttpUrl,
@@ -57,18 +58,24 @@ async function startServer() {
     throw new Error("端口 3210 已被占用。请先关闭正在运行的 Grok Canvas 或其他开发服务。");
   }
 
+  const manifest = app.isPackaged ? readDesktopManifest(path.join(process.resourcesPath, "app")) : undefined;
   const launch = serverLaunch({
     packaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     appPath: app.getAppPath(),
+    manifest,
   });
   if (!fs.existsSync(launch.entry)) {
     throw new Error(`缺少桌面端服务文件：${launch.entry}`);
   }
+  if (launch.dbWorker && !fs.existsSync(launch.dbWorker)) {
+    throw new Error(`缺少 DB Worker：${launch.dbWorker}`);
+  }
 
+  // 服务进程用 Electron 自带的 Node（ELECTRON_RUN_AS_NODE），native 必须与它的 ABI 一致。
   serverProcess = spawn(process.execPath, [launch.entry], {
     cwd: launch.cwd,
-    env: serverEnvironment(process.env, launch.nodePath),
+    env: serverEnvironment(process.env, launch.nodePath, launch.dbWorker),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
