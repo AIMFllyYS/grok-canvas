@@ -18,7 +18,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace && pnpm test:agent && pnpm test:commands && pnpm test:db && pnpm test:performance && pnpm test:planning",
+    "test": "pnpm test:ui && pnpm test:generation && pnpm test:auth && pnpm test:video && pnpm test:security && pnpm test:workspace && pnpm test:agent && pnpm test:commands && pnpm test:db && pnpm test:performance && pnpm test:media && pnpm test:planning",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "next dev -H 127.0.0.1 -p 3210",
     "build": "next build && node scripts/stage-standalone.mjs",
@@ -41,7 +41,8 @@
     "test:commands": "node --test tests/command-schema.test.mjs tests/canvas-entity-store.test.mjs tests/canvas-commands.test.mjs tests/canvas-history-leases.test.mjs tests/canvas-outbox.test.mjs tests/canvas-scene.test.mjs tests/canvas-user-actions.test.mjs tests/generation-commands.test.mjs tests/canvas-scheduler-preview.test.mjs",
     "test:planning": "node --test tests/workstation-plan.test.mjs",
     "test:performance": "node --test tests/performance-metrics.test.mjs",
-    "test:db": "node --test tests/db-worker.test.mjs tests/db-packaging.test.mjs tests/db-core.test.mjs",
+    "test:media": "node --test tests/asset-range.test.mjs",
+    "test:db": "node --test tests/db-worker.test.mjs tests/db-packaging.test.mjs tests/db-core.test.mjs tests/db-runtime-records.test.mjs",
     "db:smoke": "node scripts/db-runtime-smoke.mjs",
     "plan:validate": "node scripts/planning/validate-plan.mjs",
     "plan:publish": "node scripts/planning/publish-issues.mjs"
