@@ -1,0 +1,45 @@
+{
+  "taskId": "P2-07",
+  "sourceCommit": "06158360067fb0a66fbeffd66ba0c00b8b055d76",
+  "status": "passed",
+  "baseCommit": "547d9ca5",
+  "red": {
+    "command": "node --test tests/canvas-user-actions.test.mjs",
+    "exitCode": 1,
+    "assertion": "user-actions.ts 为只抛“未实现”的桩、FlowCanvas/prompt-panel 为 P2-06 版本时 7/8 失败（未实现、源码接线断言）；“batch 整批回滚”一项验证的是 P2-03 已有的服务端行为，红灯时即通过。"
+  },
+  "checks": [
+    {"command": "node --test tests/canvas-user-actions.test.mjs", "exitCode": 0, "evidence": "8/8：5000 节点未替换引用时 0 命令 0 兼容写入；正文用文档版本、prompt 用字段版本、固定映射 pinned；生成状态只作兼容写入且只含被触碰字段；新增+连线组成 batch 且正文进 DocumentRecord；删节点带 expectedEntityVersion、相关边级联不重复 remove、单独删边带边版本；已入队新增之后的修改是 patch；复制 ID 全新、内部边重映射、外部边不复制；服务端 batch 中连线端点无效则整批回滚不留节点；FlowCanvas/面板接线"},
+    {"command": "node --test tests/canvas-scene.test.mjs", "exitCode": 0, "evidence": "16/16，接线断言更新为 legacyAdapter 已删除、FlowCanvas 不再调用 diffCanvasOperations"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "10 个套件共 378 项（含 prompt-editor、canvas-references、asset-upload）"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "构建通过；tsconfig 副作用已还原"},
+    {"command": "node scripts/e2e/canvas-gesture.e2e.mjs http://127.0.0.1:3299/ <out>", "exitCode": 0, "evidence": "脚本化 Playwright 对隔离 standalone 产物 35/35 通过（P2-06 的 30 项 + P2-07 新增 5 项），见 manual"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "commandMap": {
+    "新增图片/视频/文本/素材节点、上传落点、粘贴、复制、生成结果占位节点": "add_nodes（预分配 UUID；正文进 DocumentRecord）；同批连线时 batch",
+    "连线、拖线到空白新建节点": "edit_edges add（与新增节点同批时 batch）",
+    "删除节点/选择、撤销新增": "delete_nodes（expectedEntityVersion，相关边服务端级联）",
+    "删除连线、剪刀边": "edit_edges remove（边版本）",
+    "撤销删除、重做新增": "add_nodes + edit_edges，节点/连线/正文文档全部新 ID（墓碑不复活）",
+    "正文、提示词、草稿提示词、名称、比例/分辨率/质量/数量/时长/音频/参考附件/上传输入、固定": "patch_nodes（正文用文档版本，其余字段版本）",
+    "拖动、resize、键盘移动、几何撤销/重做": "move_nodes（P2-06）",
+    "生成回写（status/results/primaryResultId/assetName/generationId/errorMessage/taskId…）、候选主图": "仅剩兼容写入 legacyServiceWrites（只含被触碰的 service 字段）→ P2-08 改为服务端 apply_generation",
+    "画布视口、素材库列表": "兼容写入 legacyServiceWrites 的 canvas 字段（没有对应领域命令）",
+    "旧导入/导出、服务器兼容": "lib/canvas-operations.ts 的整图转换仍保留给 operations 路由与恢复转换；FlowCanvas 不再调用 diffCanvasOperations"
+  },
+  "manual": {
+    "status": "passed",
+    "evidence": "按用户授权由 Agent 用浏览器端测（headless Chromium 真实鼠标/键盘，不是用户本人手测）：scripts/e2e/canvas-gesture.e2e.mjs 35/35。新增：面板里改正文 → 1 条 patch_nodes 且服务端正文更新；Delete 删除节点 → delete_nodes 且服务端移除；Ctrl+Z 撤销删除 → add_nodes 以新 ID 重建（原 ID 不复活）；Ctrl+C/Ctrl+V → add_nodes 且所有节点 ID 唯一；全程 operations 中不再出现正文/提示词/名称/几何。P2-06 的 30 项（拖动、群组撤销重做、冲突提示、resize、nowheel、Space 平移、局部控件、中文输入、失焦、刷新持久）全部仍通过。"
+  },
+  "act": "Check 中修正 2 个问题：(1) 文本编辑租约的 owner 是随机 UUID，而命令的 actorId 是 outbox 的 actorId，结果用户自己的正文 patch 被自己的租约以 423 挡住（浏览器矩阵首轮发现）。改为租约 owner 使用命令 actorId，contracts C3 的“只挡别人”语义成立；(2) 撤销删除与重做新增原来用同一 ID 复活，命令化后会被墓碑拒绝，改为全部新 ID 重建（与 P2-04 历史语义一致）。E2E 脚本自身修正：多选/选择改用节点下部点击并在被遮挡时用键盘聚焦选择，Space 平移后先适应全部节点；失焦用例按 commandId 去重计数（同一命令的 423 重试不算新命令）。",
+  "risks": [
+    "生成回写仍由客户端写 service 字段并经兼容 operations 保存，直到 P2-08 改为服务端 apply_generation；冲突时以服务端为准由远端合并恢复。",
+    "视口与素材库列表没有领域命令，仍走兼容写入（canvas 字段）。",
+    "远端变化仍靠 2s 轮询整份文档合并（P3-09 改为增量 SSE）；有未确认本地命令的实体保留本地，确认后下一次轮询收敛。",
+    "非几何命令被拒且无法安全改基时（新增/删除/连线冲突）丢弃该命令并提示，依靠下一次远端合并恢复真实状态。"
+  ],
+  "next": "P2-08"
+}
