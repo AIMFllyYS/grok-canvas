@@ -285,7 +285,7 @@ const TRANSIENT = new Set(["lease_conflict", "queue_full", "maintenance", "stora
  * 每个画布同时只有一条命令在途。网络结果不明时只重发原 envelope（不换 ID）；
  * 确定性冲突暂停后续发送；stale_epoch 交给恢复协调，不重发到新库。只有 ack 后才算已保存。
  */
-export function createCommandSender(options: { outbox: Outbox; canvasId: string; post: (command: CanvasCommand) => Promise<PostResult> }) {
+export function createCommandSender(options: { outbox: Outbox; canvasId: string; post: (command: CanvasCommand) => Promise<PostResult>; onAcked?: (actorSeq: number) => void }) {
   const { outbox, canvasId, post } = options;
   let running: Promise<SendResult> | null = null;
   async function drain(): Promise<SendResult> {
@@ -300,6 +300,7 @@ export function createCommandSender(options: { outbox: Outbox; canvasId: string;
       catch (error) { return { status: "retry", saved: false, error }; }
       if (result.ok) {
         await outbox.ack(result.receipt, { canvasId, actorSeq: head.actorSeq, checkpointThrough: result.checkpointThrough });
+        options.onAcked?.(head.actorSeq);
         continue;
       }
       const code = result.error?.code ?? "";

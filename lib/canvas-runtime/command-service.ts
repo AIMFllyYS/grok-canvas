@@ -13,6 +13,7 @@ import { isSqliteMode } from "../db/storage-mode";
 import { maintenanceState } from "../db/maintenance";
 import { sqlCommandRepository, sqlQuery, type CommandHint } from "../db/sql-command-repository";
 import { getLeaseService, isLeaseField, LEASE_FIELDS, type LeaseRef, type LeaseService } from "./lease-service";
+import { notifyCanvasChanged } from "./change-bus";
 import { COMMAND_ERROR_STATUS, type BatchItem, type CanvasCommand, type CommandErrorBody, type CommandErrorCode, type CommandErrorField, type CommitReceipt } from "./types";
 
 export { JSON_STORAGE_EPOCH } from "./command-state";
@@ -183,8 +184,10 @@ function runInTransaction(txn: CommandTxn, command: CanvasCommand, hash: string,
 
 export async function executeCommand(input: unknown, context: CommandContext): Promise<CommitReceipt> {
   let outcome: Outcome | null;
+  let actor: { canvasId: string; actorId: string } | null = null;
   try {
     const command = parseCommand(input);
+    actor = { canvasId: command.canvasId, actorId: command.actorId };
     if (context.origin === "client") assertClientCommand(command);
     // 存储切换期间拒绝新命令（423，可重试；客户端 outbox 保留并稍后重发）。
     if (context.origin !== "migration" && maintenanceState().active) throw new CommandError("maintenance", "系统正在维护，请稍候再试", { retryAfterMs: 2000 });
@@ -196,6 +199,7 @@ export async function executeCommand(input: unknown, context: CommandContext): P
   }
   if (!outcome) throw new CommandError("canvas_deleted", "画布不存在或已删除");
   if ("error" in outcome) throw outcome.error;
+  if (actor && !outcome.receipt.replayed) notifyCanvasChanged({ ...actor, revision: outcome.receipt.revision });
   return outcome.receipt;
 }
 
@@ -234,6 +238,7 @@ export async function executeServerCommand(
   if (outcome === null) return null;
   if (outcome === "skipped") return null;
   if ("error" in outcome) throw outcome.error;
+  if (!outcome.receipt.replayed) notifyCanvasChanged({ canvasId, revision: outcome.receipt.revision, actorId });
   return outcome.receipt;
 }
 

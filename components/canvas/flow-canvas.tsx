@@ -36,6 +36,7 @@ import { createGeometryJournal, restoreGeometry, type GeometryCheckpoint } from 
 import { createGestureStore, type GestureResult } from "@/lib/canvas-runtime/gesture-store";
 import { applyFlowGeometry, buildMoveItems, createConfirmedGeometry, displayGeometry, keepLocalGeometry, routeNodeChanges, type ConfirmedGeometry, type ConfirmedSnapshot } from "@/lib/canvas-runtime/scene-adapter";
 import { createGeometryChannel, type GeometryChannel, type GeometryConflict, type ReconcileCandidate } from "@/lib/canvas-runtime/geometry-channel";
+import { createAckReporter, createCanvasSync, type SyncStatus } from "@/lib/canvas-runtime/sync-client";
 import { openOutbox, type PostResult } from "@/lib/canvas-runtime/outbox";
 import type { HistoryEntry } from "@/lib/canvas-runtime/history";
 import type { CanvasCommand, Geometry } from "@/lib/canvas-runtime/types";
@@ -463,6 +464,11 @@ export function FlowCanvas({
   }, [pushUndo]);
 
   const revisionRef = useRef(doc.revision);
+  // P3-09 远端同步：保存/手势期间到达的变更通知先挂起；状态只用于诊断。
+  const pullPendingRef = useRef(false);
+  const requestPullRef = useRef<() => void>(() => {});
+  const syncStatusRef = useRef<SyncStatus>("closed");
+  const ackRef = useRef<ReturnType<typeof createAckReporter> | null>(null);
   const acknowledgedRef = useRef<CanvasDoc>(baseline);
   const draftKeyRef = useRef("");
   const draftReadyRef = useRef(false);
@@ -655,6 +661,11 @@ export function FlowCanvas({
       if (mounted.current && savedVersion.current === version && dirtyVersion.current !== version) {
         saveTimerRef.current = setTimeout(() => void save(), 500);
       }
+      // 保存期间到达的远端变更通知：本轮结束后再拉一次（P3-09）。
+      if (mounted.current && pullPendingRef.current) {
+        pullPendingRef.current = false;
+        setTimeout(() => requestPullRef.current(), 0);
+      }
     }
   }, [doc.id, changes, geometry, canvasFieldWrites, markCommitted, clearDraftTimer, setNodesFromSync, setEdgesFromSync]);
 
@@ -741,12 +752,20 @@ export function FlowCanvas({
           const outbox = await openOutbox();
           if (cancelled) return;
           const confirmed = createConfirmedGeometry(snapshot);
+          const acks = createAckReporter({
+            canvasId: doc.id,
+            actorId: outbox.actorId,
+            post: body => fetch(`/api/canvases/${encodeURIComponent(doc.id)}/ack`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+          });
+          ackRef.current?.dispose();
+          ackRef.current = acks;
           const channel = createGeometryChannel({
             canvasId: doc.id,
             outbox,
             confirmed,
             post: postCanvasCommand,
             fetchSnapshot: () => fetchEntitySnapshot(doc.id),
+            onAcked: actorSeq => acks.report(actorSeq),
             onHistory: (commandId, entry) => { historyRef.current.set(commandId, entry); },
             onConflict: conflict => geometryHandlersRef.current.conflict(conflict),
             onRemote: geometries => geometryHandlersRef.current.remote(geometries),
@@ -781,17 +800,35 @@ export function FlowCanvas({
       channelRef.current?.dispose();
       channelRef.current = null;
       confirmedRef.current = null;
+      ackRef.current?.dispose();
+      ackRef.current = null;
     };
   }, [doc.id, changes, geometry, gesture, markCommitted, setNodesFromSync, setEdgesFromSync, setViewport]);
 
-  // Pull remote changes without remounting the canvas or interrupting a gesture.
+  // P3-09：远端变更由 SSE 通知驱动拉取（只在别人写入时），不再常态 2 秒整图轮询。
+  // 手势/保存进行中或保存失败时先记下，空闲后再拉；不会重建整图或打断拖动。
+  const requestPull = useCallback(() => {
+    if (!draftReadyRef.current) return;
+    if (savingRef.current || !saveOkRef.current || latestRef.current.nodes.some(node => node.dragging || node.resizing)) { pullPendingRef.current = true; return; }
+    void save();
+  }, [save]);
+  useEffect(() => { requestPullRef.current = requestPull; }, [requestPull]);
   useEffect(() => {
-    if (dragging) return;
-    const timer = setInterval(() => {
-      if (draftReadyRef.current && saveOkRef.current && !savingRef.current && !latestRef.current.nodes.some(node => node.dragging || node.resizing)) void save();
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [dragging, save]);
+    if (!dragging && pullPendingRef.current) { pullPendingRef.current = false; requestPullRef.current(); }
+  }, [dragging]);
+  useEffect(() => {
+    if (!draftReady) return;
+    const sync = createCanvasSync({
+      canvasId: doc.id,
+      actorId: () => actorIdRef.current,
+      onRemoteChange: () => requestPullRef.current(),
+      onStatus: status => {
+        syncStatusRef.current = status;
+        if (typeof document !== "undefined") document.documentElement.dataset.canvasSync = status;
+      },
+    });
+    return () => sync.dispose();
+  }, [doc.id, draftReady]);
 
   useEffect(() => {
     onRegisterFlush?.(flushSave);

@@ -1,6 +1,7 @@
-import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { dataDir } from "./data-dir";
+import { notifyCanvasChanged } from "./canvas-runtime/change-bus";
 import { collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets, type CanvasLibraryAsset } from "./canvas-library";
 import { cleanCanvas } from "./canvas-cleanup";
 import { bumpVersionsForLegacyWrite, type CanvasCommandState } from "./canvas-runtime/command-state";
@@ -142,7 +143,7 @@ export async function saveCanvas(
   doc: Omit<CanvasDoc, "revision" | "updatedAt">,
   expectedRevision: number,
 ): Promise<CanvasDoc | null> {
-  return withCanvasLock(doc.id, async () => {
+  const saved = await withCanvasLock(doc.id, async () => {
     if (deletedIds.has(doc.id)) return null;
     if (isSqliteMode()) return saveCanvasSql(doc, expectedRevision);
     const current = await loadCanvas(doc.id);
@@ -150,6 +151,30 @@ export async function saveCanvas(
     if (currentRevision !== expectedRevision) return null;
     return writeCanvas(doc, current, currentRevision);
   });
+  if (saved) notifyCanvasChanged({ canvasId: doc.id, revision: saved.revision, actorId: null });
+  return saved;
+}
+
+/**
+ * SSE 事件流的低成本修订探测（P3-09）：JSON 模式先比较文件 mtime/大小，未变化直接复用上次结果；
+ * SQLite 模式只查 canvases 一行。画布不存在返回 null。
+ */
+const revisionCache = new Map<string, { mtimeMs: number; size: number; revision: number }>();
+export async function canvasRevision(id: string): Promise<{ revision: number } | null> {
+  if (!isSafeCanvasId(id) || deletedIds.has(id)) return null;
+  if (isSqliteMode()) return (await sqlRecords()).canvasRevisionSql(id);
+  try {
+    const info = await stat(canvasPath(id));
+    const cached = revisionCache.get(id);
+    if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return { revision: cached.revision };
+    const doc = await loadCanvas(id);
+    if (!doc) return null;
+    revisionCache.set(id, { mtimeMs: info.mtimeMs, size: info.size, revision: doc.revision });
+    return { revision: doc.revision };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return id === "default" ? { revision: 0 } : null;
+    throw error;
+  }
 }
 
 /** SQLite 模式的旧 PUT：新建画布直接落库；已有画布按 revision 前置条件转成带版本的命令，冲突返回 null（409）。 */
