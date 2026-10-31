@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { useStore, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
+import { sameNodeView } from "@/lib/canvas-runtime/node-view";
+import { Position, type Node, type NodeProps } from "@xyflow/react";
 import { NodeSurface } from "@/components/ui/node-surface";
 import { StatusFeedback } from "@/components/ui/status-feedback";
 import { useAuth } from "@/components/auth-status";
@@ -15,6 +16,20 @@ import { NodeTitle } from "./node-title";
 import { PlusHandle } from "./image-node";
 import { useCanvasActions } from "./flow-canvas";
 import { ImagineLoading } from "./imagine-loading";
+import { submitPosterFrame, useMediaUrl, usePlayerLease } from "@/lib/media/browser-media";
+
+/** 视频封面：取 poster 派生图（不退回原视频，避免为封面下载整段视频）；没有封面时显示占位。点击开始播放。 */
+function VideoPoster({ assetName, name, onRatio, onPlay }: { assetName: string; name: string; onRatio: (ratio: number) => void; onPlay: () => void }) {
+  const poster = useMediaUrl(`/api/assets/${encodeURIComponent(assetName)}`, "poster", 1, false);
+  return (
+    <button type="button" aria-label={`播放视频：${name}`} onClick={onPlay} className="relative flex h-full w-full items-center justify-center bg-black/80">
+      {poster.url
+        // eslint-disable-next-line @next/next/no-img-element
+        ? <img src={poster.url} alt="" draggable={false} className="h-full w-full object-contain" onLoad={(event) => { const img = event.currentTarget; if (img.naturalWidth && img.naturalHeight) onRatio(img.naturalWidth / img.naturalHeight); }} />
+        : <Video className="h-8 w-8 text-white/40" aria-hidden />}
+    </button>
+  );
+}
 
 export type VideoNodeData = {
   name: string;
@@ -70,10 +85,9 @@ export function defaultVideoNodeData(name: string): VideoNodeData {
   };
 }
 
-export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlowNode>) {
+export const VideoNode = memo(function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlowNode>) {
   const { generateVideo } = useCanvasActions();
   const { loggedIn, login } = useAuth();
-  const zoom = useStore((state) => state.transform[2]);
   const running = data.status === "running";
   const failedFeedback = generationStatusFeedback(loggedIn);
   const [ratio, setRatio] = useState<number | null>(null);
@@ -84,12 +98,22 @@ export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlow
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
+  // P4-03：默认只显示 poster；点播放才申请播放器租约并挂 <video>，被其他节点挤掉时自动卸载。
+  const player = usePlayerLease(id);
+  const posterSent = useRef(false);
   const togglePlay = () => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!player.active || !video) { player.start(() => videoRef.current?.pause()); return; }
     if (video.paused) void video.play().catch(() => {});
     else video.pause();
   };
+  // 页面隐藏时暂停，回到前台不自动播放。
+  useEffect(() => {
+    if (!player.active) { setPlaying(false); return; }
+    const onVisibility = () => { if (document.visibilityState === "hidden") videoRef.current?.pause(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [player.active]);
   const toggleMute = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -139,17 +163,23 @@ export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlow
         <Video className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <NodeTitle nodeId={id} name={data.name} />
       </div>
-      <NodeSurface selected={selected} zoom={zoom} className="relative flex items-center justify-center" style={boxStyle}>
+      <NodeSurface selected={selected} className="relative flex items-center justify-center" style={boxStyle}>
         {data.assetName ? (
           <div className="group/video relative h-full w-full">
-            <video
+            {player.active ? <video
               ref={videoRef}
               src={`/api/assets/${encodeURIComponent(data.assetName)}`}
               aria-label={`视频：${data.name}`}
               className="h-full w-full object-contain"
               playsInline
+              autoPlay
               preload="metadata"
               onClick={togglePlay}
+              onLoadedData={(event) => {
+                if (posterSent.current || !data.assetName) return;
+                posterSent.current = true;
+                void submitPosterFrame(event.currentTarget, data.assetName);
+              }}
               onLoadedMetadata={(event) => {
                 const video = event.currentTarget;
                 if (video.videoWidth > 0 && video.videoHeight > 0) {
@@ -158,11 +188,11 @@ export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlow
                 setDuration(Number.isFinite(video.duration) ? video.duration : 0);
               }}
               onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onEnded={() => setPlaying(false)}
+              onPlay={() => { setPlaying(true); player.lease()?.play(); }}
+              onPause={() => { setPlaying(false); player.lease()?.paused(); }}
+              onEnded={() => { setPlaying(false); player.lease()?.paused(); }}
               onVolumeChange={(event) => setMuted(event.currentTarget.muted)}
-            />
+            /> : <VideoPoster assetName={data.assetName} name={data.name} onRatio={setRatio} onPlay={togglePlay} />}
             <div
               className={`nodrag nopan absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/70 via-black/25 to-transparent px-1.5 pb-1.5 pt-4 text-white/90 transition-opacity duration-150 ${playing ? "opacity-0 group-hover/video:opacity-100 group-focus-within/video:opacity-100" : "opacity-100"}`}
               onPointerDown={(event) => event.stopPropagation()}
@@ -213,4 +243,4 @@ export function VideoNode({ id, data, selected, draggable }: NodeProps<VideoFlow
       </NodeSurface>
     </div>
   );
-}
+}, sameNodeView);

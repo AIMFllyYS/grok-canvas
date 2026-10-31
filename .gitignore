@@ -27,6 +27,15 @@ auth.*.json
 /.agents/
 /.impeccable/
 /.github/
+# 仅公开本次工作站规划与CI，其余个人文档和Agent配置仍忽略。
+!/docs/workstation-plan/*.md
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/workstation-ci.yml
+!/.github/workflows/workstation-plan.yml
+!/.github/pull_request_template.md
 
 # 本地临时文件与 Windows 专用启动脚本，保留在本机但不进入仓库。
 .tmp-*

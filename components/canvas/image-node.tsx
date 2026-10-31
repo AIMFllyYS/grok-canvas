@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type ComponentProps, type CSSProperties } from "react";
-import { useStore, Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useState, type ComponentProps, type CSSProperties } from "react";
+import { sameNodeView } from "@/lib/canvas-runtime/node-view";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { AssetImage } from "@/components/ui/asset-image";
 import { ControlButton } from "@/components/ui/control-button";
 import { NodeSurface } from "@/components/ui/node-surface";
@@ -81,10 +82,9 @@ export function defaultImageNodeData(name: string): ImageNodeData {
   };
 }
 
-export function ImageNode({ id, data, selected, draggable }: NodeProps<ImageFlowNode>) {
+export const ImageNode = memo(function ImageNode({ id, data, selected, draggable }: NodeProps<ImageFlowNode>) {
   const { generate, openCandidates, closeCandidates, copyCandidateAsNode, expandedNodeId } = useCanvasActions();
   const { loggedIn, login } = useAuth();
-  const zoom = useStore(state => state.transform[2]);
   const running = data.status === "running";
   const failedFeedback = generationStatusFeedback(loggedIn);
   const [ratio, setRatio] = useState<number | null>(null);
@@ -102,7 +102,12 @@ export function ImageNode({ id, data, selected, draggable }: NodeProps<ImageFlow
   // 无图：1:1 占位框；有图：按实际宽高比，横向固定宽、竖向固定高
   let boxStyle: CSSProperties;
   if (!data.assetName) {
-    boxStyle = { width: 240, height: 240 };
+    // 选了固定比例时占位框与生成结果同尺寸（与视频节点一致），布局不会在生成后错位；auto 仍是 240 方形。
+    const [w, h] = String(data.aspectRatio ?? "").split(":").map(Number);
+    const chosen = w && h && w > 0 && h > 0 ? w / h : null;
+    boxStyle = chosen === null ? { width: 240, height: 240 }
+      : chosen < 1 ? { height: BOX_SIZE, width: Math.max(120, Math.round(BOX_SIZE * chosen)) }
+      : { width: BOX_SIZE, aspectRatio: String(chosen) };
   } else if (ratio !== null && ratio < 1) {
     boxStyle = { height: BOX_SIZE, width: Math.max(120, Math.round(BOX_SIZE * ratio)) };
   } else {
@@ -128,7 +133,7 @@ export function ImageNode({ id, data, selected, draggable }: NodeProps<ImageFlow
         </>
       ) : null}
 
-      <NodeSurface selected={selected} zoom={zoom} className="relative flex items-center justify-center" style={boxStyle}>
+      <NodeSurface selected={selected} className="relative flex items-center justify-center" style={boxStyle}>
         {data.assetName ? (
           // eslint-disable-next-line @next/next/no-img-element
           <AssetImage
@@ -210,4 +215,4 @@ export function ImageNode({ id, data, selected, draggable }: NodeProps<ImageFlow
       </NodeSurface>
     </div>
   );
-}
+}, sameNodeView);

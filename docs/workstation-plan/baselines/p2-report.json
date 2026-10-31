@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-30T17:33:21.592Z",
+  "overall": "fail",
+  "runs": [
+    {
+      "label": "samples-1000.json",
+      "overall": "fail",
+      "rows": [
+        {
+          "metric": "frame_interval_ms",
+          "quantile": "p95",
+          "max": 20,
+          "status": "fail",
+          "value": 33.399999999999636,
+          "count": 250
+        },
+        {
+          "metric": "frame_interval_ms",
+          "quantile": "p99",
+          "max": 50,
+          "status": "fail",
+          "value": 66.5,
+          "count": 250
+        },
+        {
+          "metric": "pointer_to_paint_ms",
+          "quantile": "p95",
+          "max": 50,
+          "status": "pass",
+          "value": 13.800000000000182,
+          "count": 116
+        },
+        {
+          "metric": "event_to_visible_ms",
+          "quantile": "p95",
+          "max": 200,
+          "status": "unmeasured",
+          "value": null,
+          "count": 0
+        },
+        {
+          "metric": "local_commit_ms",
+          "quantile": "p95",
+          "max": 100,
+          "status": "unmeasured",
+          "value": null,
+          "count": 0
+        }
+      ],
+      "environment": {
+        "media": "none",
+        "build": "production-standalone",
+        "hardware": "AMD Ryzen 9 7945HX with Radeon Graphics         / headless-chromium",
+        "version": "p2-baseline",
+        "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5060 Laptop GPU (0x00002D19) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "nodes": 1000
+      },
+      "missingEnvironment": [],
+      "dropped": 0,
+      "overwritten": 0
+    },
+    {
+      "label": "samples-5000.json",
+      "overall": "fail",
+      "rows": [
+        {
+          "metric": "frame_interval_ms",
+          "quantile": "p95",
+          "max": 20,
+          "status": "fail",
+          "value": 300,
+          "count": 293
+        },
+        {
+          "metric": "frame_interval_ms",
+          "quantile": "p99",
+          "max": 50,
+          "status": "fail",
+          "value": 433.2999999999993,
+          "count": 293
+        },
+        {
+          "metric": "pointer_to_paint_ms",
+          "quantile": "p95",
+          "max": 50,
+          "status": "pass",
+          "value": 13.999999997766281,
+          "count": 97
+        },
+        {
+          "metric": "event_to_visible_ms",
+          "quantile": "p95",
+          "max": 200,
+          "status": "unmeasured",
+          "value": null,
+          "count": 0
+        },
+        {
+          "metric": "local_commit_ms",
+          "quantile": "p95",
+          "max": 100,
+          "status": "unmeasured",
+          "value": null,
+          "count": 0
+        }
+      ],
+      "environment": {
+        "media": "none",
+        "build": "production-standalone",
+        "hardware": "AMD Ryzen 9 7945HX with Radeon Graphics         / headless-chromium",
+        "version": "p2-baseline",
+        "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5060 Laptop GPU (0x00002D19) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "nodes": 5000
+      },
+      "missingEnvironment": [],
+      "dropped": 0,
+      "overwritten": 0
+    }
+  ],
+  "trace": {
+    "status": "unmeasured",
+    "note": "未提供用户 trace 摘要"
+  }
+}

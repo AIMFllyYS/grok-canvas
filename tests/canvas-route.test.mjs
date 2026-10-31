@@ -84,7 +84,9 @@ test("操作接口并发保存不同字段并拒绝同字段冲突，重试去�
   const callOperation = ops => operationsRoute.POST(new Request("http://localhost/api/canvases/operation-route/operations", { method: "POST", body: JSON.stringify({ operations: ops }) }), { params: Promise.resolve({ id: doc.id }) });
   const replies = await Promise.all([callOperation([a]), callOperation([b])]);
   assert.deepEqual(replies.map(reply => reply.status), [200, 200]);
+  const committed = await store.module.loadCanvas(doc.id);
   assert.equal((await callOperation([a])).status, 200);
+  assert.equal((await store.module.loadCanvas(doc.id)).revision, committed.revision, "重复回执不应再次写盘或递增版本");
   assert.equal((await callOperation([operation("cccccccc-cccc-4ccc-8ccc-cccccccccccc", "content", "旧", "冲突")])).status, 409);
   const saved = await store.module.loadCanvas(doc.id);
   assert.equal(saved.nodes[0].data.content, "新");

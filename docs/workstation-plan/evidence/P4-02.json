@@ -1,0 +1,39 @@
+{
+  "taskId": "P4-02",
+  "sourceCommit": "127197a6bba16acead64c91d2412f49204dba713",
+  "status": "passed",
+  "baseCommit": "8906922b",
+  "red": {
+    "command": "node --test tests/media-derivatives.test.mjs",
+    "exitCode": 1,
+    "assertion": "derivatives.ts / metadata.ts / media-runtime.mjs 为只抛“未实现”的桩、derivative-worker.cjs 对所有操作返回 unknown_op、派生路由不存在、上传/生成路由与打包脚本为基线版本时 6/6 失败。"
+  },
+  "checks": [
+    {"command": "node --test tests/media-derivatives.test.mjs", "exitCode": 0, "evidence": "8/8（合成 PNG/JPEG/WebP，临时数据目录）：长边 256→256×128、1024 不放大 800×400、竖图 85×256、EXIF 方向 6 先旋转再缩放 128×256、透明通道保留；同 key 100 并发只处理 1 次、已 ready 不再排队、只有一份产物与元数据；源 hash 变化生成新派生且旧 key 文件字节不变；坏图 failed（invalid_image）不伪 ready、失败持久化不自动重试、显式 retry 重新排队；20000×20000 声明的 PNG 以 too_many_pixels 拒绝；源素材不受影响；路径穿越/缺失/错误类型拒绝；队列上限 503 queue_full 不写失败记录；Worker 被终止后不写 failed，同 key 再请求完成 ready；视频 poster 未主动播放前 absent 且不排队，截帧提交后 1024×576 ready 并缓存；派生路由 202/200(image/webp, ETag)/304/422+POST 重试/poster 404→POST 200/未知变体 400；接线：上传与生成落盘后排队、sharp 精确 0.35.4、media-runtime staging 可复核且篡改被拒、三端 smoke 含媒体 probe"},
+    {"command": "node --test tests/asset-upload.test.mjs tests/generation-record.test.mjs", "exitCode": 0, "evidence": "与 media-derivatives 同跑共 18/18，上传校验与生成记录未退化"},
+    {"command": "node scripts/db-runtime-smoke.mjs --target=node", "exitCode": 0, "evidence": "media probe ok（仓库 worker 与 staging 副本各一次），staging 副本的 sharp 解析自 .tmp-db-smoke/node/media-runtime/node_modules/sharp；derive 2×1、坏图 invalid_image、sharp 0.35.4 / libvips 8.18.6"},
+    {"command": "node scripts/db-runtime-smoke.mjs --target=standalone", "exitCode": 0, "evidence": "构建产物 standalone/media-runtime 复核通过，sharp 从 standalone/media-runtime/node_modules/sharp 加载，派生成功；首轮因探针内手写 PNG 字节无效失败，改为 zlib 现场编码后通过"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "合入 P3-06 后 12 个套件共 458 项"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "构建与 stage-standalone 通过（含 media-runtime staging）；tsconfig 副作用已还原"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "untested": [
+    "Electron 目标的 media probe 本地未运行（需 Electron 二进制与 desktop:bundle），由 CI windows 腿的 `db-runtime-smoke --target=electron` 执行；合并前核对 CI 日志 DB_SMOKE 行 media.ok=true 且 electron 版本非空。"
+  ],
+  "handoff": {
+    "urls": "GET /api/assets/<name>/derivative/<thumb256|thumb1024|poster>；POST 同一 URL：poster 提交截帧（≤8MiB 图片字节），其它变体为显式重试",
+    "statusCodes": "200 ready(image/webp, ETag=\"<sourceHash>-<variant>\", X-Media-Width/Height) · 304 · 202 pending(Retry-After:1) · 422 failed{error, retry} · 404 poster absent · 400 未知变体/类型不符 · 503 queue_full 或 worker 不可用",
+    "retryPolicy": "失败写 derivatives/<key>.failed.json 并原样返回，不自动重试；只有 POST（retry）清除记录重新排队；队列满与 Worker 退出属于暂时错误，不写失败记录",
+    "nativeManifest": "media-runtime/manifest.json：sharp@0.35.4 + @img/colour、detect-libc、semver + @img/sharp-<target>（Linux 另含 @img/sharp-libvips-<target>）；standalone 与 Electron 各自 staging，Electron 包删除生产安装带进来的 sharp/@img 副本",
+    "videoPoster": "惰性策略：服务端从不批量提取视频帧；poster 只在用户首次主动播放后由客户端截帧 POST，校验后缓存；未生成前返回 absent，调用方用固定占位。客户端截帧接线留给 P4-03 媒体调度，本 Issue 不宣称离线批量提取已实现。"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P4-02 manual=false；只用合成图片，未下载真实用户媒体"},
+  "act": "按规格执行 `pnpm add sharp@0.35.4 --save-exact --ignore-scripts`，lockfile 只新增 sharp 的直接依赖条目，并去掉 @img/colour 与 sharp 快照上的 optional 标记（它们从可选依赖变为直接依赖链），没有升级或新增其它包版本。派生处理只在独立 Worker 中进行，服务端代码不静态导入 sharp。标准输出的 hash 只取源文件内容（素材不可变），旧引用永远指向旧 key 的文件。",
+  "risks": [
+    "图片节点、素材库与工具结果尚未改为读取缩略图 URL；消费方接入与解码预算在 P4-03。",
+    "派生状态目前保存在数据目录的 derivatives/ 文件中；切换到 SQLite 后迁移到 asset_derivatives 表（P3-08 之后）。"
+  ],
+  "next": "P4-03"
+}

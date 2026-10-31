@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "taskId": "P6-03",
+  "kind": "performance-and-soak",
+  "environment": {
+    "os": "Windows 11 (10.0.26300)",
+    "cpu": "AMD Ryzen 9 7945HX (32 threads)",
+    "gpu": "NVIDIA GeForce RTX 5060 Laptop GPU (ANGLE D3D11)",
+    "ramGB": 31,
+    "node": "v24.20.0",
+    "browser": "Playwright headless Chromium",
+    "build": "isolated production standalone (.tmp-workstation-check)",
+    "storage": "JSON authority (synthetic data dir)"
+  },
+  "method": {
+    "drag": "scripts/performance/baseline.e2e.mjs: import synthetic fixture (topology 2n, long text), drag one text node 120 steps, page-side rAF intervals; metrics recorder off",
+    "soak": "scripts/performance/soak.mjs 4 minutes, seed 1: 2 batches/s x 20 ops (add/update/remove, <=400 live entities), wheel pan every 10s, CDP Performance.getMetrics every 30s"
+  },
+  "drag": [
+    { "nodes": 1000, "firstInteractiveMs": 1915, "frameP50Ms": 16.7, "frameP95Ms": 16.7, "frameP99Ms": 16.8, "p601BaselineP95Ms": 33 },
+    { "nodes": 5000, "firstInteractiveMs": 7402, "frameP50Ms": 16.8, "frameP95Ms": 100.0, "frameP99Ms": 116.7, "p601BaselineP95Ms": 300 },
+    { "nodes": 10000, "firstInteractiveMs": 14843, "frameP50Ms": 49.9, "frameP95Ms": 66.7, "frameP99Ms": 150.0, "p601BaselineP95Ms": null }
+  ],
+  "soak": {
+    "minutes": 4,
+    "batchesSent": 472,
+    "skipped": 0,
+    "failed": 0,
+    "operations": { "add": 3377, "update": 3085, "remove": 2978 },
+    "liveEntitiesAtEnd": 399,
+    "heapMB": { "start": 9.3, "peakRunning": 29.4, "settled": 12.4, "afterForcedGc": 12.4 },
+    "jsEventListeners": { "start": 504, "peakRunning": 1345, "settled": 493 },
+    "domNodes": { "start": 351, "peakRunning": 1299, "settled": 597 },
+    "pageErrors": 0,
+    "syncAtEnd": "live"
+  },
+  "targets": [
+    { "metric": "frame p95 <= 20ms", "1000": "pass", "5000": "fail (100ms)", "10000": "fail (66.7ms)" },
+    { "metric": "first interactive geometry <= 2s at 10000", "result": "fail (14.8s, JSON-mode full document load)" },
+    { "metric": "full <= 80 / player <= 2 / playing <= 1 / network <= 6 / decode <= 2", "result": "pass (enforced by code, see tests/canvas-lod, tests/media-budget)" },
+    { "metric": "60-minute soak", "result": "not run; 4-minute soak only (heap and listeners return to start level)" }
+  ],
+  "knownGaps": [
+    "Drag frame spikes at 5000+ nodes come from React Flow processing the whole node array per frame.",
+    "First load at 10000 nodes is dominated by loading and diffing the full JSON document; SQLite mode not measured.",
+    "Numbers are one headless run on this machine, not a hardware-qualified benchmark."
+  ]
+}

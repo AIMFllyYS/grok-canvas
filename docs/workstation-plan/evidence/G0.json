@@ -1,0 +1,49 @@
+{
+  "taskId": "G0",
+  "sourceCommit": "033107a3ab4d87bbb75f97638dc02221f6ea080b",
+  "status": "passed",
+  "red": null,
+  "environment": {
+    "checkout": "git worktree add 新建于 origin/feat/workstation-performance@033107a，无 node_modules/.next/.env/账户目录复制",
+    "os": "Windows 11 (本地复现)",
+    "node": "24.20.0",
+    "pnpm": "10.33.2",
+    "install": "pnpm install --frozen-lockfile --ignore-scripts，exit 0"
+  },
+  "checks": [
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "本地输出：规划校验通过：34任务，61依赖，推荐执行顺序无冲突。"},
+    {"command": "node --test tests/workstation-plan.test.mjs", "exitCode": 0, "evidence": "本地：tests 11 / pass 11 / fail 0"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "本地 tsc --noEmit 无输出；CI 三个矩阵 job 均通过：https://github.com/AIMFllyYS/grok-canvas/actions/runs/41014541259"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "本地 8 个套件共 251 项全过（ui 9、generation 39、auth 12、video 44、security 3、workspace 123、agent 10、planning 11），GROK_CANVAS_PORT 未设置；CI 同 run 通过"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "本地隔离目录生产构建，生成 .tmp-workstation-check/BUILD_ID；CI ubuntu/Node 24.20.0 默认 .next 构建通过并上传 workstation-build-metadata-033107a3ab4d87bbb75f97638dc02221f6ea080b（1333 B，未过期）"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "本地与 CI 均无空白错误"},
+    {"command": "CI matrix: Workstation CI run 41014541259", "exitCode": 0, "evidence": "Validate (ubuntu-latest, Node 22.22.2) success https://github.com/AIMFllyYS/grok-canvas/actions/runs/41014541259/job/123927766954 ; Validate (ubuntu-latest, Node 24.20.0) success https://github.com/AIMFllyYS/grok-canvas/actions/runs/41014541259/job/123927766930 ; Validate (windows-latest, Node 24.20.0) success https://github.com/AIMFllyYS/grok-canvas/actions/runs/41014541259/job/123927766781"},
+    {"command": "Publish Workstation Issues run 41014541174", "exitCode": 0, "evidence": "publish success https://github.com/AIMFllyYS/grok-canvas/actions/runs/41014541174 ，artifact workstation-plan-033107a3ab4d87bbb75f97638dc02221f6ea080b（71376 B）"},
+    {"command": "Issue 图核对（gh api：issues、issues/1/sub_issues、dependencies/blocked_by）", "exitCode": 0, "evidence": "父 #1 含 34 个子 Issue（#2 G0 … #35 P6-04）；manifest 61 条依赖边与 blocked-by 一一对应，无缺失、无多余；正文 Task-ID 齐全、无乱码；文档链接全部指向 033107a3ab4d87bbb75f97638dc02221f6ea080b"},
+    {"command": "git ls-files 敏感文件扫描", "exitCode": 0, "evidence": "仅 .env.example 被跟踪；无 .env/auth.json/数据库/媒体/node_modules/.next；.gitignore 覆盖 /data/、.grok-canvas/、auth*.json、.tmp-*"}
+  ],
+  "baselineFiles": [
+    "tests/canvas-performance.test.mjs",
+    "tests/canvas-interaction.test.mjs",
+    "lib/canvas-runtime/geometry-journal.ts",
+    ".github/workflows/workstation-ci.yml",
+    ".github/workflows/workstation-plan.yml"
+  ],
+  "untested": [
+    {"item": "实际拖动帧率", "status": "未测", "owner": "P6-01 埋点 / P6-03 实机"},
+    {"item": "pointer-to-paint 延迟", "status": "未测", "owner": "P6-01 / P6-03"},
+    {"item": "Electron 安装与桌面运行", "status": "未测", "owner": "P3-02 / P6-04"},
+    {"item": "60 分钟长稳", "status": "未测", "owner": "P6-03"},
+    {"item": "P0/P1 实机 trace 与桌面体验签收", "status": "未测", "owner": "维护者人工"},
+    {"item": "SQLite 驱动与 DB Worker", "status": "未实施", "owner": "P3-01 起"},
+    {"item": "LOD / 视口裁剪", "status": "未实施", "owner": "P4-04 / P4-05"}
+  ],
+  "manual": {"status": "not-required", "evidence": "G0 manifest.manual=false；本任务只复现机器基线，不含人工交互验收，上述 untested 项保持未测"},
+  "act": "仅复现/整理基线，red=null（G0 豁免）。云端 033107a 干净安装、规划校验、规划测试、typecheck、全量 251 项测试、隔离生产构建均一次通过，无需修正业务代码。注意：本地主工作区另有一个修 P1 的提交 358a0d5 尚未推送，不属于本基线；它推送到集成分支后，后续任务以届时的 origin 为基。",
+  "risks": [
+    "历史数字 240 已不是当前测试数（现为 251，含规划 11 项），后续以实际值为准",
+    "CI 通过只代表机器回归，不抵消 P6 的人工/性能/三端闸门",
+    "protocol.md 的 Windows 隔离构建会让 Next 16 自动向已跟踪的 tsconfig.json include 追加 .tmp-workstation-check/types/**/*.ts 与 .tmp-workstation-check/dev/types/**/*.ts；本次已还原未提交。后续任务构建后需检查 git status，勿把该副作用混入 PR（P3-02 统一构建根目录时可一并处理）"
+  ],
+  "next": "P2-01"
+}

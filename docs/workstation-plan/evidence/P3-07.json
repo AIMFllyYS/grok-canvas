@@ -1,0 +1,39 @@
+{
+  "taskId": "P3-07",
+  "sourceCommit": "0eac18ce383d13ca16c07f8e8c184df3f0c8b5a8",
+  "status": "passed",
+  "baseCommit": "6c6531b3",
+  "red": {
+    "command": "node --test tests/db-backup.test.mjs",
+    "exitCode": 1,
+    "assertion": "backup.cjs / restore.cjs / asset-publication.ts 为只抛“未实现”的桩，assets.ts、worker.cjs、db-runtime.mjs 为基线版本时 9/9 失败。"
+  },
+  "checks": [
+    {"command": "node --test tests/db-backup.test.mjs", "exitCode": 0, "evidence": "9/9（真实临时 SQLite + 临时媒体目录）：备份期间持续写入（k>400 证明未阻塞），还原库 revision 与节点数/边数（revision-1）一致、foreign_key_check 为空，manifest 记录画布 revision；源媒体缺失→incomplete、manifest 标 missing、verify 失败、restore backup_invalid、listBackups 不列为有效；已登记 missing 记为 missing_known；源媒体与登记 hash 不符→hash_mismatch；备份后篡改媒体/db.sqlite/manifest 均被 verify 拒绝且失败还原不留目录；旧迁移目录→schema_future、改动迁移→schema_checksum；中断备份无 manifest 不列入有效、DB 记录 failed；还原目标为活动目录/其子目录/父目录/非空目录均拒绝且原文件保留，活动库可读，staging 清理；生成记录还原后快照真实、同快照幂等、异快照冲突；publishFile 无覆盖、登记失败文件保留、孤儿/临时/受保护分类且不删文件；Worker backup op 异步、health 先返回"},
+    {"command": "node --test tests/db-worker.test.mjs tests/db-packaging.test.mjs", "exitCode": 0, "evidence": "与 db-backup 同跑 32/32；staging probe 断言新增 migrate 与 formalBackup 步骤"},
+    {"command": "node scripts/db-runtime-smoke.mjs --target=node", "exitCode": 0, "evidence": "probe formalBackup={status:complete, verified:true, restoredCount:1}"},
+    {"command": "node scripts/db-runtime-smoke.mjs --target=standalone", "exitCode": 0, "evidence": "构建产物 db-runtime 内的 worker 完成正式备份→校验→还原，restoredCount 1；server.js 启动 ok"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "合入最新集成分支后 11 个套件共 425 项"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "构建通过；tsconfig 副作用已还原"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "untested": [
+    "electron 目标的 db:smoke 本地未运行（需要 .desktop/app 打包产物），由 CI windows 腿执行；以 CI 结果为准。"
+  ],
+  "backupFormat": {
+    "version": 1,
+    "layout": "<backupRoot>/<id>/manifest.json（最后原子写出）、db.sqlite（Backup API 快照）、media/<assetName>",
+    "manifest": "{version, id, status: complete|incomplete, startedAt, completedAt, schemaVersion, database:{file, sha256, bytes}, canvases:[{id, revision}], media:[{assetName, relativePath, kind, state: ok|missing|missing_known|hash_mismatch, sha256, bytes, registeredSha256?}]}",
+    "validityCheck": "require('lib/db/restore.cjs').verifyBackup(<备份目录>) → {ok, problems}",
+    "restore": "restoreBackup({backupDir, targetDir, activeDataDir})：targetDir 必须是不存在或空的新目录、且不与活动数据目录互相包含；先写 <targetDir>.staging-xxxx 并校验，通过后改名；产物 <targetDir>/grok-canvas.sqlite 与 <targetDir>/assets/。不切换活动库，切换由 P3-08 负责。"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P3-07 manual=false；只用临时目录，未触碰真实数据，未执行真实 GC"},
+  "act": "首轮业务测试全部通过；全量测试暴露三个手写转译加载器（generation-batch/generation-record/video-route）不认识新增的 media/asset-publication 依赖，已补进加载列表；staging probe 的精确步骤断言随新增步骤更新。文件发布改为临时文件→flush→长度校验→link 无覆盖发布，登记失败时文件保留并进入 orphanReport，不假定 DB 回滚会删除文件。备份不复制活跃 .sqlite，也不持写事务等待复制媒体。",
+  "risks": [
+    "备份与交互写共用同一 Worker 连接：better-sqlite3 在线备份按页推进，同连接写入会让备份跟随更新到完成时刻的状态（仍是一致的已提交状态）；超大库的耗时未测量。",
+    "orphanReport 的受保护集合（备份引用、未知任务引用）由调用方传入；自动汇集这些引用在 P3-10 的维护流程里接线。"
+  ],
+  "next": "P3-06"
+}

@@ -1,6 +1,11 @@
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { dataDir } from "./data-dir";
+
+/** P3-08：storage-state 标记存在即 SQLite 权威；SQL 实现按需动态加载（JSON 模式与独立转译的测试不引入数据库模块）。 */
+const sqliteMode = () => existsSync(path.join(dataDir(), "storage-state.json"));
+const sqlRecords = () => import("./db/sql-records");
 import type { VideoRequestPlan } from "./video-request";
 
 /**
@@ -60,6 +65,7 @@ function taskPath(taskId: string): string {
 }
 
 async function writeRecord(record: VideoTaskRecord): Promise<void> {
+  if (sqliteMode()) { await (await sqlRecords()).writeVideoTaskSql(record); return; }
   await mkdir(VIDEO_TASKS_DIR, { recursive: true });
   const temporary = path.join(VIDEO_TASKS_DIR, `${record.taskId}.${crypto.randomUUID()}.tmp`);
   await writeFile(temporary, `${JSON.stringify(record)}\n`, { flush: true });
@@ -94,6 +100,7 @@ export async function createVideoTask(
 }
 
 export async function readVideoTask(taskId: string): Promise<VideoTaskRecord | null> {
+  if (sqliteMode()) { taskPath(taskId); return (await sqlRecords()).readVideoTaskSql(taskId); }
   try {
     return JSON.parse(await readFile(taskPath(taskId), "utf8")) as VideoTaskRecord;
   } catch (error) {
@@ -119,6 +126,7 @@ export function isTerminalVideoTask(record: VideoTaskRecord): boolean {
 }
 
 export async function listVideoTasks(): Promise<VideoTaskRecord[]> {
+  if (sqliteMode()) return (await sqlRecords()).listVideoTasksSql();
   let names: string[];
   try {
     names = await readdir(VIDEO_TASKS_DIR);

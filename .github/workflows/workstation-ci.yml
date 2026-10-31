@@ -1,0 +1,117 @@
+name: Workstation CI
+
+on:
+  push:
+    branches: [feat/workstation-performance]
+  pull_request:
+    branches: [feat/workstation-performance]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: workstation-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 22.22.2
+          - os: ubuntu-latest
+            node: 24.20.0
+          - os: windows-latest
+            node: 24.20.0
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      GROK_CANVAS_PORT: '3210'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - name: Install locked dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Validate plan and dependency graph
+        run: pnpm plan:validate
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Full registered tests
+        run: pnpm test
+      - name: Check whitespace errors
+        run: git diff --check
+      - name: DB runtime smoke (Node development)
+        run: node scripts/db-runtime-smoke.mjs --target=node
+      - name: Production build
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24.20.0'
+        run: pnpm build
+      - name: DB runtime smoke (standalone)
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24.20.0'
+        run: node scripts/db-runtime-smoke.mjs --target=standalone
+      # Windows：三端打包闸门。依赖脚本保持关闭，只显式下载 Electron 二进制；缺失时 smoke 直接失败。
+      - name: Download Electron binary explicitly
+        if: matrix.os == 'windows-latest'
+        run: node node_modules/electron/install.js
+      - name: Isolated production build (Windows)
+        if: matrix.os == 'windows-latest'
+        env:
+          GROK_CANVAS_BUILD_DIR: .tmp-db-smoke-build
+        run: pnpm build
+      - name: DB runtime smoke (Windows standalone)
+        if: matrix.os == 'windows-latest'
+        env:
+          GROK_CANVAS_BUILD_DIR: .tmp-db-smoke-build
+        run: node scripts/db-runtime-smoke.mjs --target=standalone
+      - name: Stage Electron desktop package
+        if: matrix.os == 'windows-latest'
+        env:
+          GROK_CANVAS_BUILD_DIR: .tmp-db-smoke-build
+        run: |
+          pnpm desktop:prepare
+          pnpm desktop:deps
+          pnpm desktop:finish
+      - name: DB runtime smoke (Electron service mode)
+        if: matrix.os == 'windows-latest'
+        env:
+          GROK_CANVAS_BUILD_DIR: .tmp-db-smoke-build
+        run: node scripts/db-runtime-smoke.mjs --target=electron
+      - name: Upload DB runtime reports and package file list
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-runtime-${{ matrix.os }}-node${{ matrix.node }}-${{ github.sha }}
+          path: |
+            .tmp-db-smoke/*-report.json
+            .desktop/app-files.json
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14
+      - name: Upload non-secret build metadata
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.node == '24.20.0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: workstation-build-metadata-${{ github.sha }}
+          path: |
+            .next/BUILD_ID
+            .next/routes-manifest.json
+            docs/workstation-plan/evidence/*.json
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14

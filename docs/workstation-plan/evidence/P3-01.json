@@ -1,0 +1,48 @@
+{
+  "taskId": "P3-01",
+  "sourceCommit": "7eaf3a78613096ffcadcefacdb53edaef61204b2",
+  "status": "passed",
+  "baseCommit": "acccaad8",
+  "red": {
+    "command": "node --test tests/db-worker.test.mjs",
+    "exitCode": 1,
+    "assertion": "service.ts 为桩（getDbService 抛“未实现”）时 8 项全部失败：7 项 Error: 未实现，1 项 test:db 脚本不存在（argument must be of type string, received undefined）。说明：protocol.ts/driver.cjs/worker.cjs 的草稿写在红灯运行之前，但红灯时它们没有被测试路径调用，测试完全依赖尚未实现的 service。"
+  },
+  "decision": {
+    "driver": "better-sqlite3@13.0.3（精确版本，package.json 不带 ^），2026-08-05 发布，当前 latest；engines node>=22，兼容最低线 22.18",
+    "binary": "13.x 基于 Node-API（node-addon-api 8.9.2），包内自带 prebuilds/{win32,linux,linuxmusl,darwin}-{x64,arm64}.node，没有 install 生命周期脚本；pnpm install --frozen-lockfile --ignore-scripts 即可运行，不需要放开任何依赖脚本",
+    "sqlite": "实测 sqlite_version()=3.53.4（≥3.51.3）；compile_options 含 THREADSAFE=2、DQS=0、DEFAULT_FOREIGN_KEYS、DEFAULT_WAL_SYNCHRONOUS=1、OMIT_SHARED_CACHE、ENABLE_FTS5",
+    "lockfile": "pnpm add better-sqlite3@13.0.3 --save-exact --ignore-scripts：锁文件只新增 better-sqlite3 与 node-addon-api 两个条目（+17 行），没有升级其他依赖",
+    "rejected": "内置 node:sqlite 不作为 fallback（C4）"
+  },
+  "checks": [
+    {"command": "node --test tests/db-worker.test.mjs", "exitCode": 0, "evidence": "本地 8/8，连跑 3 次都通过（约 8.4s）。DB_HEALTH {driver 13.0.3, sqlite 3.53.4, node v24.20.0, modules 137, napi 10, win32 x64, native win32-x64.node}；CI 在 ubuntu Node 22.22.2 / 24.20.0 与 windows Node 24.20.0 上执行同一套件"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "本地无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "本地 10 个套件共 339 项（新增 db 套件 8 项）"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "lib/db 尚未被应用路由导入，生产构建不受影响；tsconfig 副作用已还原"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "behaviour": {
+    "pragmas": "journal_mode=wal、synchronous=2(FULL)、foreign_keys=1、busy_timeout=2000，均为打开后回读的实际值；不符时 health.ok=false",
+    "transactions": "事务中先插入再抛错：父表计数仍为 1，没有残留；子表外键指向不存在的父键时抛 constraint；关闭后重开数据仍在",
+    "whitelist": "未知 op（exec）返回 unknown_op；把 SQL 文本当 repository 名提交返回 unknown_repository；测试 repository 默认关闭",
+    "singleton": "两个独立加载的 service 模块实例对同一文件返回同一服务，health 的 workerThreadId 相同",
+    "thread": "health.workerThreadId 与测试主线程 threadId 不同，查询不在主线程执行",
+    "capacity": "queueItems=3 时第 4 个请求立即返回 queue_full；超过 4MiB 的单请求返回 request_too_large；超时请求返回 timeout，之后 pendingCount=0",
+    "crash": "worker 内 process.exit 后，在途与排队请求都立即 reject worker_exited（远早于 5s 超时）；状态变为 crashed，新请求被拒；显式 restart 后状态回到 ready，数据仍在",
+    "close": "close 先执行 wal_checkpoint(TRUNCATE) 并关闭连接，再结束线程、释放单例；之后的请求返回 closed；测试进程正常退出，没有遗留句柄"
+  },
+  "handoffToP3_02": [
+    "worker 路径：默认 GROK_CANVAS_DB_WORKER 或 <cwd>/lib/db/worker.cjs；standalone 与 Electron 需要把 lib/db/worker.cjs、lib/db/driver.cjs 作为运行资源复制，并设置 GROK_CANVAS_DB_WORKER",
+    "native 资源：node_modules/better-sqlite3/prebuilds/<platform>-<arch>.node（Node-API）。Electron 45 内置 Node 能否直接加载，必须用 process.execPath 实测（本任务不作结论）",
+    "Next 打包：better-sqlite3 需要保持为 server external，不能被打进 bundle"
+  ],
+  "manual": {"status": "not-required", "evidence": "manifest P3-01 manual=false；没有 UI"},
+  "act": "首轮全量门禁发现 2 个问题，都已修正并复验：(1) @types/node 26 中 Worker 的 error 事件参数类型为 unknown，service.ts 直接读取 .message 导致 typecheck 与构建失败，改为先用 instanceof Error 判断；(2) 容量测试把超时设为 300ms，在 pnpm test 中 Worker 冷启动加上建表已经超过 300ms，阻塞请求之前的建表就先超时。改为 1500ms 超时和 3000ms 阻塞，断言语义不变；单独连跑 3 次都通过。本任务通过不代表 Electron 兼容；没有迁移任何用户数据。",
+  "risks": [
+    "Electron ABI/加载、standalone 打包路径都未验证，由 P3-02 实测",
+    "超时只让调用方停止等待，worker 中已在执行的同步语句仍会跑完（better-sqlite3 无法中断同步调用）；长任务必须走维护队列"
+  ],
+  "next": "P3-02"
+}

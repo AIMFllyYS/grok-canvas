@@ -1,0 +1,40 @@
+{
+  "taskId": "P2-08",
+  "sourceCommit": "1686df120b7aab069896b88afee3cec4114f8649",
+  "status": "passed",
+  "baseCommit": "c304beec",
+  "red": {
+    "command": "node --test tests/generation-commands.test.mjs tests/canvas-persistence.test.mjs",
+    "exitCode": 1,
+    "assertion": "generation-commands.ts 为只抛“未实现”的桩、canvas-persistence.ts 为 P2-07 版本（GET 整图 + operations diff）时 14/14 失败。"
+  },
+  "checks": [
+    {"command": "node --test tests/generation-commands.test.mjs", "exitCode": 0, "evidence": "10/10：A 发起后切 B 只写 A 并登记 A 素材库；A 节点删 → orphan、素材登记、节点不复活；G1 晚于 G2 不覆盖 G2 但 G1 素材可追溯；同一结果重复登记不改节点、修订号不增长；A 画布删 → canvas_deleted 不重建；素材无文件或无服务端生成记录 → 拒绝（伪造收费成功）；视频结果由服务端读取任务记录、mp4 不进图片库、旧任务不覆盖新任务；生成开始须持有同 ID 待定占用且只写状态/请求快照字段；Agent 编辑在用户持有正文租约时被拒、名称/位置正常合并并有独立 actor 序号；后台写入路径不再引用 diffCanvasOperations/mutateCanvas"},
+    {"command": "node --test tests/canvas-persistence.test.mjs", "exitCode": 0, "evidence": "4/4：后台图片回写只 POST 一次 service-write；视频只提交 taskId；orphan 回调与画布已删 404；暂时性 423 重试同一请求、确定性拒绝直接报错"},
+    {"command": "node --experimental-strip-types --test tests/generation-claims.test.mjs tests/video-runtime.test.mjs tests/agent.test.mjs", "exitCode": 0, "evidence": "含在 pnpm test 中通过：占用状态机、视频运行时、Agent 工具测试未退化"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "10 个套件共 384 项"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "构建通过，路由表含 /api/canvases/[id]/service-write；tsconfig 副作用已还原"},
+    {"command": "node scripts/e2e/canvas-gesture.e2e.mjs http://127.0.0.1:3301/ <out>", "exitCode": 0, "evidence": "浏览器矩阵 35/35（拖动/命令化用户动作在客户端不再写 service 字段后无回归）"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "writeCallGraph": {
+    "浏览器用户动作": "FlowCanvas.save → translateUserWrites → outbox → POST /commands（P2-06/07）",
+    "浏览器生成状态（开始/结果/失败/视频轮询/选择候选/未确认）": "FlowCanvas.serviceWrite → POST /api/canvases/[id]/service-write → applyServiceWrite → executeServerCommand(apply_generation, actor=GENERATION_ACTOR_ID)",
+    "后台画布（非前台）结果": "persistImageOutcome / persistVideoOutcome（签名保留）→ service-write",
+    "Agent 新增/编辑/连线/参考绑定": "agentAddNodes / agentEditNodes / agentPatchFields → executeServerCommand(actor=AGENT_ACTOR_ID)",
+    "Agent 生成开始/结果/失败/任务 ID/视频查询": "agentGenerationWrite → apply_generation（start/result/fail）",
+    "生成占用（claim/complete/unknown/acknowledge）": "lib/generation-claims.ts 仍用 updateCanvas（同一画布锁、单命令顺序），P3-05 在 SQL 中与结果原子合并",
+    "画布素材库列表": "生成结果命令之后用 updateCanvas 合并 libraryAssets（过渡期两步写入，不是数据库事务；P3-05 原子化）",
+    "剩余兼容路径": "operations 路由（视口/素材库 canvas 字段与旧客户端），lib/agent/canvas.ts 的 mutateCanvas/editNodes 导出保留但工具不再调用"
+  },
+  "manual": {"status": "not-required", "evidence": "manifest P2-08 manual=false；真实收费生成按授权不运行，结果登记由服务端测试与 mock 覆盖，浏览器矩阵确认用户交互无回归"},
+  "act": "设计：apply_generation 增加 mode（start 需持有同 ID 待定占用；select 只能改 primaryResultId/assetName；fail 与 result 一样须 generationId 匹配），并让占用识别经 sourceNodeId（结果节点的占用记在来源节点）。浏览器不能再写 service 字段：成功结果必须有服务端写过的素材文件与生成记录，视频结果由服务端读取任务记录生成，客户端只提交 taskId。Check 中修正：重复登记同一结果时素材库 addedAt 取当前时间导致每次都写一次画布，改为取生成记录的 savedAt，重复登记不再增加修订号。未运行真实收费生成，未改变上游鉴权与收费策略。",
+  "risks": [
+    "生成占用（generation-claims）与素材库列表仍是旧 JSON 路径上的独立写入（同一画布锁、顺序执行），与结果命令不是一个数据库事务；P3-05 用 SQL 合并。",
+    "浏览器矩阵不触发真实收费生成；生成状态链路由服务端测试与 mock 上游覆盖。",
+    "Agent 编辑的引用校验依赖 reducer 对被修改节点与连线目标的校验，不再对整图所有媒体节点重算。"
+  ],
+  "next": "P2-09"
+}

@@ -1,7 +1,7 @@
 "use client";
-import { useEffect, useMemo, useState, useRef } from "react";
+import { memo, useEffect, useMemo, useState, useRef } from "react";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport, type ToolUIPart } from "ai";
+import { DefaultChatTransport, type ToolUIPart, type UIMessage } from "ai";
 import { Popover } from "@base-ui/react/popover";
 import { Check, Plus, History, LoaderCircle } from "lucide-react";
 import {
@@ -15,13 +15,19 @@ import {
   MessageResponse,
 } from "@/components/ai-elements/message";
 import { Reasoning } from "@/components/ai-elements/reasoning";
-import { Tool } from "@/components/ai-elements/tool";
+import { Tool, ToolNodeNames, ToolRecords, collectNodeNames, type ToolRecordView } from "@/components/ai-elements/tool";
 import { AgentGlyph } from "./icons";
 import { AgentComposer } from "./composer";
 import { ModelPicker } from "./model-picker";
 import { FloatingAgent } from "./floating-agent";
 import type { AgentState, AgentSettings, Attachment } from "@/lib/agent/schema";
 import { finalizeInterruptedMessages } from "@/lib/agent/messages";
+import { bridgeToolPart, previewStore } from "@/lib/canvas-runtime/preview-store";
+import { createScheduler } from "@/lib/canvas-runtime/scheduler";
+import { createFreezer, MESSAGE_PAGE, windowMessages } from "@/lib/agent/conversation-controller";
+
+/** 预显示更新的有界调度器：同一工具条目只保留最新一次，终态立即执行（P2-09）。 */
+const previewScheduler = createScheduler();
 async function request(url: string, init?: RequestInit) {
   const r = await fetch(url, {
     ...init,
@@ -33,11 +39,14 @@ async function request(url: string, init?: RequestInit) {
 }
 export function CanvasAgent({
   canvasId,
+  active = true,
   beforeSend,
   onBusy,
   onSettled,
 }: {
   canvasId: string;
+  /** 是否是当前画布的 Agent；不是时面板隐藏，消息列表冻结（P4-06）。 */
+  active?: boolean;
   beforeSend: () => Promise<boolean>;
   onBusy: (busy: boolean) => void;
   onSettled: () => Promise<void>;
@@ -157,6 +166,7 @@ export function CanvasAgent({
         <Chat
           key={`${canvasId}:${state.activeConversationId}`}
           state={state}
+          visible={active && open}
           beforeSend={beforeSend}
           onBusy={updateBusy}
           onFinish={async () => {
@@ -173,14 +183,41 @@ export function CanvasAgent({
     </FloatingAgent>
   );
 }
+/** 单条消息（P4-06）：已完成的消息对象不变时不重绘；只有正在流式输出的最后一条随 token 更新。 */
+const ChatMessage = memo(function ChatMessage({ message: m, animating, nodeNames }: { message: UIMessage; animating: boolean; nodeNames: ReadonlyMap<string, string> }) {
+  return (
+    <Message from={m.role}>
+      <div className="agent-author">
+        {m.role === "user" ? "你" : "Agent"}
+      </div>
+      <MessageContent>
+        {m.parts.map((p, i) =>
+          p.type === "text" ? (
+            <MessageResponse key={i} isAnimating={animating}>
+              {p.text}
+            </MessageResponse>
+          ) : p.type === "reasoning" ? (
+            <Reasoning key={i} text={p.text} streaming={animating && p.state === "streaming"} />
+          ) : p.type.startsWith("tool-") ? (
+            <ToolNodeNames.Provider key={i} value={nodeNames}>
+              <Tool part={p as ToolUIPart} />
+            </ToolNodeNames.Provider>
+          ) : null,
+        )}
+      </MessageContent>
+    </Message>
+  );
+});
 function Chat({
   state,
+  visible,
   beforeSend,
   onBusy,
   onFinish,
   onConversation,
 }: {
   state: AgentState;
+  visible: boolean;
   beforeSend: () => Promise<boolean>;
   onBusy: (v: boolean) => void;
   onFinish: () => Promise<void>;
@@ -237,6 +274,46 @@ function Chat({
   });
   const busy = status === "streaming" || status === "submitted",
     disabled = switching || uploading;
+  // P4-06：隐藏的面板冻结显示快照（useChat 继续接收，任务照常运行）；只渲染最后 50 条，可加载更早。
+  const [freeze] = useState(() => createFreezer<typeof messages>());
+  const displayed = freeze(messages, visible);
+  const [shownCount, setShownCount] = useState(MESSAGE_PAGE);
+  const windowed = windowMessages(displayed, shownCount);
+  const lastId = displayed.at(-1)?.id;
+  // 工具行显示节点名：从本对话的工具结果里收集 ID → 名称；内容不变时保持同一个对象，已完成的消息不因此重绘。
+  const namesRef = useRef<ReturnType<typeof collectNodeNames> | null>(null);
+  const nodeNames = useMemo(() => {
+    const next = collectNodeNames(displayed);
+    const previous = namesRef.current;
+    if (previous && previous.size === next.size && [...next].every(([key, value]) => previous.get(key) === value)) return previous;
+    namesRef.current = next;
+    return next;
+  }, [displayed]);
+  // 只读预显示：只桥接正在进行的最后一条回复里已确认的工具输入/结果；结束后清掉没有交接正式节点的条目。
+  const canvasId = state.canvasId;
+  useEffect(() => {
+    const last = messages.at(-1);
+    if (!last || last.role !== "assistant") return;
+    for (const part of last.parts) if (part.type.startsWith("tool-")) bridgeToolPart(previewStore, canvasId, part as ToolUIPart, previewScheduler);
+    if (!busy) {
+      previewScheduler.cancelPrefix(`${canvasId}:`);
+      for (const entry of previewStore.get(canvasId)) if (!entry.nodeId) previewStore.remove(canvasId, entry.toolCallId, entry.itemIndex);
+    }
+  }, [messages, busy, canvasId]);
+  useEffect(() => () => { previewScheduler.cancelPrefix(`${canvasId}:`); previewStore.clearCanvas(canvasId); }, [canvasId]);
+  // P5-04：空闲时读取工具调用的持久状态（读取即收敛中断的调用），中断的工具卡片据此显示真实结果。
+  const [toolRecords, setToolRecords] = useState<ReadonlyMap<string, ToolRecordView>>(() => new Map());
+  useEffect(() => {
+    if (busy) return;
+    let stopped = false;
+    void fetch(`/api/agent/tool-calls?canvasId=${encodeURIComponent(canvasId)}`, { cache: "no-store" })
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { records?: Array<{ toolCallId: string } & ToolRecordView> } | null) => {
+        if (!stopped && d?.records) setToolRecords(new Map(d.records.map(r => [r.toolCallId, { phase: r.phase, ...(r.summary ? { summary: r.summary } : {}), ...(r.error ? { error: r.error } : {}) }])));
+      })
+      .catch(() => {});
+    return () => { stopped = true; };
+  }, [busy, canvasId]);
   useEffect(() => {
     onBusy(busy);
     return () => {};
@@ -302,33 +379,16 @@ function Chat({
               <span>整理想法，创建或调整文本、图片与视频节点。</span>
             </div>
           )}
-          {messages.map((m) => (
-            <Message key={m.id} from={m.role}>
-              <div className="agent-author">
-                {m.role === "user" ? "你" : "Agent"}
-              </div>
-              <MessageContent>
-                {m.parts.map((p, i) =>
-                  p.type === "text" ? (
-                    <MessageResponse
-                      key={i}
-                      isAnimating={busy && m.id === messages.at(-1)?.id}
-                    >
-                      {p.text}
-                    </MessageResponse>
-                  ) : p.type === "reasoning" ? (
-                    <Reasoning
-                      key={i}
-                      text={p.text}
-                      streaming={busy && p.state === "streaming"}
-                    />
-                  ) : p.type.startsWith("tool-") ? (
-                    <Tool key={i} part={p as ToolUIPart} />
-                  ) : null,
-                )}
-              </MessageContent>
-            </Message>
+          {windowed.hidden > 0 && (
+            <button type="button" className="agent-load-more" onClick={() => setShownCount((count) => count + MESSAGE_PAGE)}>
+              加载更早的 {Math.min(windowed.hidden, MESSAGE_PAGE)} 条消息（还有 {windowed.hidden} 条）
+            </button>
+          )}
+          <ToolRecords.Provider value={toolRecords}>
+          {windowed.items.map((m) => (
+            <ChatMessage key={m.id} message={m} animating={busy && m.id === lastId} nodeNames={nodeNames} />
           ))}
+          </ToolRecords.Provider>
           {status === "submitted" && (
             <div className="agent-status">
               <LoaderCircle size={13} className="animate-spin" />

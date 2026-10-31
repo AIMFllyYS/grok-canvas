@@ -6,6 +6,8 @@ import { useReactFlow, useStore } from "@xyflow/react";
 import { Hand, Map as MapIcon, Maximize, Minus, MousePointer2, Plus } from "lucide-react";
 import type { InteractionMode } from "@/lib/canvas-interaction";
 import type { ReactNode } from "react";
+import { fitDocument } from "@/lib/canvas-runtime/selection";
+import { displayGeometry } from "@/lib/canvas-runtime/scene-adapter";
 
 export function CanvasControls({
   minimapOpen,
@@ -21,7 +23,14 @@ export function CanvasControls({
   leading?: ReactNode;
 }) {
   const zoom = useStore((state) => state.transform[2]);
-  const { zoomTo, zoomIn, zoomOut, fitView } = useReactFlow();
+  const screenWidth = useStore((state) => state.width);
+  const screenHeight = useStore((state) => state.height);
+  const { zoomTo, zoomIn, zoomOut, getNodes, setViewport } = useReactFlow();
+  // 适配整张文档（P4-04）：按完整节点几何计算，概览模式下被隐藏的节点也算在内。
+  const fitAll = () => {
+    const viewport = fitDocument(getNodes().map(node => displayGeometry(node)), { width: screenWidth, height: screenHeight }, { padding: 0.1, minZoom: 0.1, maxZoom: 2 });
+    if (viewport) void setViewport(viewport, { duration: 200 });
+  };
 
   return (
     <div className="flex items-center gap-1">
@@ -42,7 +51,7 @@ export function CanvasControls({
       <ControlButton
         className="flex size-7 items-center justify-center rounded-full hover:bg-accent"
         aria-label="适应全部节点"
-        onClick={() => void fitView()}
+        onClick={fitAll}
       >
         <Maximize className="size-4" />
       </ControlButton>

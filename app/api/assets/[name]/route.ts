@@ -1,49 +1,15 @@
-import { readFile, stat } from "node:fs/promises";
-import { NextResponse } from "next/server";
-import { assetPath, isSafeAssetName, mimeForAsset } from "@/lib/assets";
+import { assetResponse } from "@/lib/media/asset-stream";
 
 export const runtime = "nodejs";
 
-export async function GET(
-  _request: Request,
-  context: { params: Promise<{ name: string }> },
-) {
+/** 资产读取（P4-01）：流式 + 单 Range（206/416），不整文件读入内存。名称校验与同源守卫保持不变。 */
+export async function GET(request: Request, context: { params: Promise<{ name: string }> }) {
   const { name } = await context.params;
-  if (!isSafeAssetName(name)) {
-    return new NextResponse("not found", { status: 404 });
-  }
-  try {
-    const bytes = await readFile(assetPath(name));
-    return new NextResponse(new Uint8Array(bytes), {
-      headers: {
-        "Content-Type": mimeForAsset(name),
-        "Content-Length": String(bytes.byteLength),
-        "Cache-Control": "public, max-age=31536000, immutable",
-      },
-    });
-  } catch {
-    return new NextResponse("not found", { status: 404 });
-  }
+  return assetResponse(request, name);
 }
 
-/** Read image file metadata without transferring the image again. */
-export async function HEAD(
-  _request: Request,
-  context: { params: Promise<{ name: string }> },
-) {
+/** 只读元数据：复用 Range 决策，绝不创建 body 流。 */
+export async function HEAD(request: Request, context: { params: Promise<{ name: string }> }) {
   const { name } = await context.params;
-  if (!isSafeAssetName(name)) return new NextResponse(null, { status: 404 });
-  try {
-    const file = await stat(assetPath(name));
-    if (!file.isFile()) return new NextResponse(null, { status: 404 });
-    return new NextResponse(null, {
-      headers: {
-        "Content-Type": mimeForAsset(name),
-        "Content-Length": String(file.size),
-        "Cache-Control": "public, max-age=31536000, immutable",
-      },
-    });
-  } catch {
-    return new NextResponse(null, { status: 404 });
-  }
+  return assetResponse(request, name, { head: true });
 }

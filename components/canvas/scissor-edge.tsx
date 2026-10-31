@@ -7,7 +7,6 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
-  useStore,
   type EdgeProps,
 } from "@xyflow/react";
 import { Scissors } from "lucide-react";
@@ -56,7 +55,6 @@ export function ScissorEdge(props: EdgeProps) {
   const hideTimer = useRef<number | null>(null);
   const hitPathRef = useRef<SVGPathElement>(null);
   const { removeEdge } = useCanvasActions();
-  const zoom = useStore((state) => state.transform[2]);
   const [path, labelX, labelY] = getBezierPath({
     sourceX: props.sourceX,
     sourceY: props.sourceY,
@@ -101,7 +99,7 @@ export function ScissorEdge(props: EdgeProps) {
           <ControlButton
             style={{
               // 与节点胶囊、输入框同一规则：缩放画布时保持屏幕尺寸不变
-              transform: `translate(-50%, -50%) translate(${buttonX}px, ${buttonY}px) scale(${1 / zoom})`,
+              transform: `translate(-50%, -50%) translate(${buttonX}px, ${buttonY}px) scale(var(--canvas-inverse-zoom, 1))`,
               pointerEvents: "all",
             }}
             className="nodrag nopan absolute flex size-6 items-center justify-center rounded-full bg-popover text-muted-foreground shadow-md ring-1 ring-foreground/10 hover:bg-accent hover:text-foreground"

@@ -26,8 +26,9 @@ export function NodeActions({ id, name, assetName, selected, pinned, kind = "ima
   const inspectLabel = kind === "video" ? "查看详情" : "查看大图";
 
   return <>
-    {/* NodeToolbar keeps its screen size independent of canvas zoom. */}
-    <NodeToolbar position={Position.Top} offset={20} isVisible={!!selected}>
+    {/* NodeToolbar keeps its screen size independent of canvas zoom. 只在选中时挂载：
+        NodeToolbar 的 store 订阅每次视口/拖动更新都会遍历全部节点数选中数，几千节点时每个实例都很贵。 */}
+    {selected && <NodeToolbar position={Position.Top} offset={20} isVisible>
       <div className="nodrag nopan flex items-center rounded-full border bg-popover p-1 shadow-lg" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
         <ControlButton className={`${iconButton} ${pinned ? "bg-accent text-primary" : ""}`} title={pinned ? "取消固定" : "固定节点"} aria-label={pinned ? "取消固定" : "固定节点"} aria-pressed={pinned} onClick={() => updateNode(id, { draggable: pinned })}>
           {pinned ? <PinOff size={17} /> : <Pin size={17} />}
@@ -38,7 +39,7 @@ export function NodeActions({ id, name, assetName, selected, pinned, kind = "ima
           <ControlButton className={iconButton} title={inspectLabel} aria-label={inspectLabel} onClick={() => setOpen(true)}><Expand size={17} /></ControlButton>
         </>}
       </div>
-    </NodeToolbar>
+    </NodeToolbar>}
     {pinned && <span className="pointer-events-none absolute right-2 top-2 z-10 rounded-full bg-background/85 p-1.5 shadow" title="节点已固定"><Pin size={13} /></span>}
     {assetName && <Dialog open={open} onOpenChange={setOpen}>
       {open && (kind === "video"

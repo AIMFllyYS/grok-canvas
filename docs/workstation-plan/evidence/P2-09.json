@@ -1,0 +1,36 @@
+{
+  "taskId": "P2-09",
+  "sourceCommit": "813252aabd6b1ff32e13212ad031bf2a3945dd53",
+  "status": "passed",
+  "baseCommit": "50a7f67d",
+  "red": {
+    "command": "node --test tests/canvas-scheduler-preview.test.mjs",
+    "exitCode": 1,
+    "assertion": "scheduler/preview-store/runtime-budget 换成只抛“未实现”的桩、Agent 面板与 FlowCanvas 为 P2-08 版本时 10/10 失败。说明：三个模块的草稿写在测试之前，红灯时被替换为桩，测试完全依赖尚未实现的接口。"
+  },
+  "checks": [
+    {"command": "node --test tests/canvas-scheduler-preview.test.mjs", "exitCode": 0, "evidence": "10/10：C7 预算常量唯一来源且冻结；假时钟下 4ms 切片与优先级 gesture>terminal>visible>preview>prefetch、同级 FIFO；10ms 长任务独占一片后立即让出、后续不饿死；1000 次同 key 预显示更新合并为 1 条且终态两条都执行；预显示容量超限拒绝并标记已简化、终态不受限、清空后复位；flushTerminals 同步执行终态、取消 A 前缀不影响 B；PreviewStore 按 toolCallId:itemIndex、画布隔离、取消 A 不清 B、稳定快照；PreviewStore 容量；Agent 工具桥接（完整输入出预览、成功交接正式 ID、失败无残影、正式 nodes/edges/history/assets 不变）；接线源码约束"},
+    {"command": "pnpm typecheck", "exitCode": 0, "evidence": "无错误"},
+    {"command": "pnpm test", "exitCode": 0, "evidence": "10 个套件共 394 项（含 agent-sdk）"},
+    {"command": "pnpm build (GROK_CANVAS_BUILD_DIR=.tmp-workstation-check)", "exitCode": 0, "evidence": "构建通过；tsconfig 副作用已还原"},
+    {"command": "node scripts/e2e/canvas-gesture.e2e.mjs http://127.0.0.1:3302/ <out>", "exitCode": 0, "evidence": "浏览器矩阵 38/38（新增 3 项：预显示层渲染且 pointer-events:none、不改变正式节点数、正式节点存在时自动移除）"},
+    {"command": "node scripts/planning/validate-plan.mjs", "exitCode": 0, "evidence": "34任务，61依赖"},
+    {"command": "git diff --check", "exitCode": 0, "evidence": "无空白错误"}
+  ],
+  "handoff": {
+    "budget": "lib/canvas-runtime/runtime-budget.ts：RUNTIME_BUDGET（C7 全部常量）与 PRIORITY，P4 投影/媒体调度、P6-01 采样从这里读",
+    "scheduler": "createScheduler({now, yieldTo, sliceMs, previewItems, previewBytes}) → schedule({key,priority,run,cancel,bytes}) / cancel / cancelPrefix / flushTerminals / pump / stats()（slices/ran/merged/rejected/cancelled/maxSliceMs/queued）",
+    "preview": "previewStore（浏览器单例）upsert/remove/clearCanvas/get/subscribe/simplified/load；bridgeToolPart 当前只处理完整确认的 tool-add_canvas_nodes 输入与结果；partial-input、编辑/删除预览、持久 tool_calls 留给 P5"
+  },
+  "manual": {
+    "status": "passed",
+    "evidence": "按用户授权由 Agent 用浏览器端测（headless Chromium，不是用户本人手测）：浏览器矩阵 38/38。预显示层在真实页面中渲染为 pointer-events:none 的虚线框，不改变 React Flow 节点数；把正式节点 ID 交给预显示后该条目自动移除；拖动/命令化动作等前 35 项无回归。真实 Agent 对话需要模型调用，本轮未调用真实模型（P2-09 Act 约定），工具状态桥接由单元测试覆盖。"
+  },
+  "act": "设计取舍：预显示条目经调度器以 preview 优先级合并（同一 toolCallId:itemIndex 只保留最新），终态（成功交接 ID、失败/拒绝移除）以 terminal 优先级加入并立即 flushTerminals，保证不被预览饿死；Agent 面板只桥接最后一条进行中回复的工具状态，流结束后清掉没有交接正式节点的条目，历史会话里中断的调用不会画出残影；CanvasPreview 只订阅“哪些预期节点已出现”的字符串，拖动更新不会让它重渲染。本包不新建 SSE、不持久 tool_calls、不解析逐 token JSON、不调用真实模型；没有真实计数时不显示百分比。",
+  "risks": [
+    "预显示目前只覆盖 add_canvas_nodes 的完整输入；edit/remove 预览与 partial-input 原位接替属于 P5-01/P5-02。",
+    "正式节点通过 2s 轮询合并出现（P3-09 改为增量 SSE），期间预显示保持可见。",
+    "调度器尚未接管 P4 的媒体/投影工作，P4 接入时用同一 PRIORITY 与预算。"
+  ],
+  "next": "P6-01"
+}

@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import ts from "typescript";
 import { interactionConfig, interactionShortcut } from "../lib/canvas-interaction.ts";
 
 test("选择模式保留框选和中右键平移", () => {
@@ -29,4 +31,60 @@ test("模式快捷键不会抢占编辑和系统快捷键", () => {
   assert.equal(interactionShortcut({ key: "h", ctrlKey: true }), null);
   assert.equal(interactionShortcut({ key: "h", isComposing: true }), null);
   assert.equal(interactionShortcut({ key: "h" }, true), null);
+});
+
+// ---- 节点族拖动契约 ----
+// React Flow 起手前用 !hasSelector(target, ".nodrag", node) 过滤，按下点落在 .nodrag 里这次拖动就被丢弃。
+// 所以「铺满内容面」的层不能标 nodrag，标了整张卡片就只剩内边距和标题条能拖（视频、文本节点都踩过）。
+// 宽度铺满不算问题（底部控制条本来就可以通栏），整高或铺满四边才是致命的。
+const NODE_COMPONENTS = ["image-node", "asset-node", "video-node", "text-node"];
+const FULL_BLEED = ["h-full", "inset-0"];
+
+// className 可能是字符串字面量、无插值模板，或带插值的模板（只取静态片段）。
+const staticFragments = (initializer) => {
+  if (!initializer) return [];
+  const expression = ts.isJsxExpression(initializer) ? initializer.expression : initializer;
+  if (!expression) return [];
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return [expression.text];
+  if (ts.isTemplateExpression(expression)) return [expression.head.text, ...expression.templateSpans.map(span => span.literal.text)];
+  return [];
+};
+
+const classNameValues = (source) => {
+  const file = ts.createSourceFile("node.tsx", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
+  const values = [];
+  const visit = (node) => {
+    if (ts.isJsxAttribute(node) && node.name.getText(file) === "className") values.push(...staticFragments(node.initializer));
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return values;
+};
+
+for (const name of NODE_COMPONENTS) {
+  test(`节点族拖动契约：${name} 的 nodrag 不铺满内容面`, async () => {
+    const values = classNameValues(await readFile(new URL(`../components/canvas/${name}.tsx`, import.meta.url), "utf8"));
+    const offenders = values.filter((value) => /\bnodrag\b/.test(value) && FULL_BLEED.some((token) => value.includes(token)));
+    assert.deepEqual(offenders, [], "整高或铺满的层标了 nodrag，节点就拖不动了");
+  });
+}
+
+test("文本节点正文靠 nowheel 保住滚动，不被画布抢走滚轮", async () => {
+  const values = classNameValues(await readFile(new URL("../components/canvas/text-node.tsx", import.meta.url), "utf8"));
+  assert.ok(values.some((value) => value.includes("nowheel") && value.includes("overflow-auto")), "正文容器既要能滚动，也不能把滚轮交给画布缩放");
+});
+
+// ---- 多选后的退出方式 ----
+// React Flow 的 .react-flow__nodesselection-rect 铺在选中集合的包围盒上（pointer-events: all），
+// 框选后组内节点全被它盖住：点不到单节点、也进不了单节点面板。
+test("多选包围盒只作视觉提示，不拦截组内节点的点选", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.react-flow__nodesselection-rect\s*\{[^}]*pointer-events:\s*none/, "多选包围盒必须让出指针事件");
+});
+test("Esc 退出多选：清空选中，不只收起面板", async () => {
+  const source = await readFile(new URL("../components/canvas/flow-canvas.tsx", import.meta.url), "utf8");
+  const escapeBranch = source.match(/if \(event\.key === "Escape"\) \{[\s\S]*?\n      \}/);
+  assert.ok(escapeBranch, "找不到 Esc 处理分支");
+  assert.match(escapeBranch[0], /selected: false/, "Esc 要清空选中集合");
+  assert.match(escapeBranch[0], /setPanelNodeId\(null\)/, "Esc 同时收起节点面板");
 });
