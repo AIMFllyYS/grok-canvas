@@ -52,6 +52,7 @@ page.on("response", response => {
   if (response.url().endsWith("/commands")) void response.text().then(text => commandResponses.push({ status: response.status(), body: text.slice(0, 300) })).catch(() => {});
 });
 const commandResponses = [];
+let conflictExpected = true;
 page.on("console", msg => { if (msg.type() === "error" && !/status of 409/.test(msg.text())) consoleErrors.push(msg.text()); });
 page.on("pageerror", error => consoleErrors.push(String(error)));
 const commands = () => requests.filter(r => r.url.endsWith("/commands"));
@@ -173,10 +174,21 @@ async function drag(id, dx, dy, { steps = 120, from = "content", during } = {}) 
 {
   const startBox = await box("n4");
   const startServer = await nodeOf("n4");
+  let agentStatus = 0;
   await drag("n4", 0, 220, { steps: 60, during: async () => {
     const current = (await api("GET", `/api/canvases/${canvasId}?background=1`)).body.nodes.find(n => n.id === "n4");
-    await api("POST", `/api/canvases/${canvasId}/operations`, { operations: [{ id: randomUUID(), target: "node", entityId: "n4", path: ["position"], before: { exists: true, value: current.position }, after: { exists: true, value: { x: current.position.x + 700, y: current.position.y } } }] });
+    agentStatus = (await api("POST", `/api/canvases/${canvasId}/operations`, { operations: [{ id: randomUUID(), target: "node", entityId: "n4", path: ["position"], before: { exists: true, value: current.position }, after: { exists: true, value: { x: current.position.x + 700, y: current.position.y } } }] })).status;
   } });
+  // SQLite 权威模式下旧接口写入也经命令服务，用户拖动持有的 geometry 租约会让它直接 423；
+  // JSON 模式的旧接口不检查租约，写入成功后由用户命令触发冲突提示。两种都不能回弹或覆盖用户落点。
+  if (agentStatus === 423 || agentStatus === 409) {
+    await sleep(2500);
+    const server = await nodeOf("n4");
+    const now = await box("n4");
+    conflictExpected = false;
+    check("同几何冲突：租约保护，外部写入被拒绝", true, `SQLite 模式，HTTP ${agentStatus}`);
+    check("租约保护下画面不回弹且服务端采用用户落点", Math.abs(now.y - startBox.y - 220) < 4 && server.geometry.y - startServer.geometry.y > 200 && server.geometry.x === startServer.geometry.x, JSON.stringify({ dy: now.y - startBox.y, start: startServer.geometry, now: server.geometry }));
+  } else {
   const toast = page.getByText(/个节点的位置已被其他修改改变/);
   const visible = await toast.waitFor({ timeout: 8000 }).then(() => true, () => false);
   check("同几何冲突可见", visible);
@@ -195,6 +207,7 @@ async function drag(id, dx, dy, { steps = 120, from = "content", during } = {}) 
     await sleep(2000);
     const server = await nodeOf("n4");
     check("保留我的位置：服务端采用用户落点", server.geometry.y - startServer.geometry.y > 200 && server.geometry.x === startServer.geometry.x, JSON.stringify({ start: startServer.geometry, now: server.geometry }));
+  }
   }
 }
 
@@ -403,7 +416,7 @@ async function drag(id, dx, dy, { steps = 120, from = "content", during } = {}) 
 }
 
 check("无页面错误", consoleErrors.length === 0, consoleErrors.slice(0, 5).join(" | "));
-check("唯一的非 2xx 响应是冲突场景里 /commands 的 409", badResponses.length >= 1 && badResponses.every(r => r.status === 409 && r.url.endsWith("/commands")), JSON.stringify(badResponses));
+check(conflictExpected ? "唯一的非 2xx 响应是冲突场景里 /commands 的 409" : "页面没有非 2xx 响应（租约保护下不产生冲突）", conflictExpected ? badResponses.length >= 1 && badResponses.every(r => r.status === 409 && r.url.endsWith("/commands")) : badResponses.length === 0, JSON.stringify(badResponses));
 check("全程旧 operations 未发送几何", geometryOps().length === 0, JSON.stringify(geometryOps().slice(0, 3)));
 await browser.close();
 writeFileSync(path.join(outDir, "report.json"), JSON.stringify({ base, canvasId, results, commands: commands().length, consoleErrors }, null, 2));

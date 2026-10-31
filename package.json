@@ -43,7 +43,7 @@
     "test:performance": "node --test tests/performance-metrics.test.mjs",
     "test:reliability": "node --test tests/workstation-faults.test.mjs tests/performance-soak.test.mjs tests/workstation-release.test.mjs",
     "test:media": "node --test tests/asset-range.test.mjs tests/media-derivatives.test.mjs tests/media-budget.test.mjs",
-    "test:db": "node --test tests/db-worker.test.mjs tests/db-packaging.test.mjs tests/db-core.test.mjs tests/db-runtime-records.test.mjs tests/db-commands.test.mjs tests/db-backup.test.mjs tests/db-import.test.mjs tests/db-cutover.test.mjs tests/db-retention.test.mjs",
+    "test:db": "node --test tests/db-worker.test.mjs tests/db-packaging.test.mjs tests/db-core.test.mjs tests/db-runtime-records.test.mjs tests/db-commands.test.mjs tests/db-backup.test.mjs tests/db-import.test.mjs tests/db-cutover.test.mjs tests/db-retention.test.mjs tests/db-import-legacy.test.mjs",
     "db:smoke": "node scripts/db-runtime-smoke.mjs",
     "plan:validate": "node scripts/planning/validate-plan.mjs",
     "plan:publish": "node scripts/planning/publish-issues.mjs"
