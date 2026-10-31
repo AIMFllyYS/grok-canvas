@@ -9,6 +9,9 @@ import { assetPath, isSafeAssetName } from "../assets";
 import { assertClientCommand, canonicalCommand, CommandValidationError, LIMITS, parseCommand } from "./command-schema";
 import { reduceCommand, ReducerError } from "./command-reducer";
 import { jsonCommandRepository, loadEntitySnapshot, type CommandRepository, type CommandTxn } from "./json-repository";
+import { isSqliteMode } from "../db/storage-mode";
+import { maintenanceState } from "../db/maintenance";
+import { sqlCommandRepository, sqlQuery, type CommandHint } from "../db/sql-command-repository";
 import { getLeaseService, isLeaseField, LEASE_FIELDS, type LeaseRef, type LeaseService } from "./lease-service";
 import { COMMAND_ERROR_STATUS, type BatchItem, type CanvasCommand, type CommandErrorBody, type CommandErrorCode, type CommandErrorField, type CommitReceipt } from "./types";
 
@@ -63,7 +66,24 @@ let selectedStore: CommandStore | null = null;
 /** 只在测试/明确的特性开关下调用；传 null 恢复 JSON。不会自动切换用户主库。 */
 export function selectCommandStore(store: CommandStore | null) { selectedStore = store; }
 export const selectedCommandStore = () => selectedStore;
-const repositoryFor = (context: CommandContext) => context.repository ?? selectedStore?.repository ?? jsonCommandRepository;
+/** 默认仓库跟随存储权威：storage-state 标记为 SQLite 时一律经 DB Worker，旧 JSON 只读（P3-08）。 */
+const repositoryFor = (context: CommandContext): CommandRepository => context.repository ?? selectedStore?.repository ?? (isSqliteMode() ? sqlCommandRepository : jsonCommandRepository);
+
+/** 命令触及的实体：SQL 仓库据此一次预取读集（缺的再按需补读）。 */
+export function commandHint(command: CanvasCommand): CommandHint {
+  const nodeIds = new Set<string>(), edgeIds = new Set<string>();
+  let documents = false;
+  const items: BatchItem[] = command.kind === "batch" ? command.payload.commands : [{ kind: command.kind, payload: command.payload } as BatchItem];
+  for (const item of items) {
+    if (item.kind === "move_nodes") for (const move of item.payload.items) nodeIds.add(move.nodeId);
+    else if (item.kind === "patch_nodes") for (const patch of item.payload.items) { nodeIds.add(patch.nodeId); if (patch.field === "content") documents = true; }
+    else if (item.kind === "delete_nodes") { documents = true; for (const removal of item.payload.items) nodeIds.add(removal.nodeId); }
+    else if (item.kind === "add_nodes") { documents = true; for (const node of item.payload.nodes) nodeIds.add(node.id); }
+    else if (item.kind === "edit_edges") { for (const edge of item.payload.add) { edgeIds.add(edge.id); nodeIds.add(edge.source); nodeIds.add(edge.target); } for (const removal of item.payload.remove) edgeIds.add(removal.edgeId); }
+    else if (item.kind === "apply_generation") nodeIds.add(item.payload.nodeId);
+  }
+  return { nodeIds: [...nodeIds], edgeIds: [...edgeIds], documents, commandIds: [command.commandId], actorIds: [command.actorId] };
+}
 
 export class ChangesError extends Error {
   readonly code: string;
@@ -79,6 +99,7 @@ export async function listCanvasChanges(params: { canvasId: string; afterRevisio
   const store = selectedStore;
   try {
     if (store) return await store.listChanges(params);
+    if (isSqliteMode()) return await sqlQuery<ChangesPage>("changes.listChanges", params);
     const snapshot = await loadEntitySnapshot(params.canvasId);
     if (!snapshot) throw new ChangesError("not_found", "画布不存在或已删除", 404);
     if (params.storageEpoch !== undefined && params.storageEpoch !== snapshot.storageEpoch) throw new ChangesError("stale_epoch", `存储纪元已变为 ${snapshot.storageEpoch}`, 409);
@@ -89,6 +110,9 @@ export async function listCanvasChanges(params: { canvasId: string; afterRevisio
     if (error instanceof ChangesError) throw error;
     const known = error as { code?: unknown; status?: unknown; message?: string };
     if (typeof known?.code === "string" && typeof known.status === "number") throw new ChangesError(known.code, known.message ?? known.code, known.status);
+    // DB Worker 返回的错误只带 code：按 C6 映射状态码。
+    const WORKER_STATUS: Record<string, number> = { snapshot_required: 410, stale_epoch: 409, not_found: 404, invalid_request: 400 };
+    if (typeof known?.code === "string" && WORKER_STATUS[known.code]) throw new ChangesError(known.code, known.message ?? known.code, WORKER_STATUS[known.code]!);
     const command = toCommandError(error);
     if (command) throw new ChangesError(command.code, command.message, command.status);
     throw error;
@@ -162,9 +186,11 @@ export async function executeCommand(input: unknown, context: CommandContext): P
   try {
     const command = parseCommand(input);
     if (context.origin === "client") assertClientCommand(command);
+    // 存储切换期间拒绝新命令（423，可重试；客户端 outbox 保留并稍后重发）。
+    if (context.origin !== "migration" && maintenanceState().active) throw new CommandError("maintenance", "系统正在维护，请稍候再试", { retryAfterMs: 2000 });
     const hash = commandHash(command);
     const repository = repositoryFor(context);
-    outcome = await repository.transact<Outcome>(command.canvasId, (txn) => runInTransaction(txn, command, hash, context));
+    outcome = await (repository.transact as (id: string, edit: (txn: CommandTxn) => Outcome, hint?: CommandHint) => Promise<Outcome | null>)(command.canvasId, (txn) => runInTransaction(txn, command, hash, context), commandHint(command));
   } catch (error) {
     throw toCommandError(error) ?? error;
   }
@@ -187,14 +213,17 @@ export async function executeServerCommand(
   context: CommandContext,
 ): Promise<CommitReceipt | null> {
   if (context.origin === "client") throw new CommandError("invalid_command", "客户端不能使用服务端命令入口");
+  if (context.origin !== "migration" && maintenanceState().active) throw new CommandError("maintenance", "系统正在维护，请稍候再试", { retryAfterMs: 2000 });
   let outcome: Outcome | "skipped" | null;
   try {
     const repository = repositoryFor(context);
+    // commandId 在重跑间保持不变：SQL 仓库遇到读集缺失或并发会重跑 edit，同一次服务端写入只能有一个身份。
+    const commandId = randomUUID();
     outcome = await repository.transact<Outcome | "skipped">(canvasId, (txn) => {
       const body = build(txn.reader, { revision: txn.revision });
       if (!body) return "skipped";
       const command = parseCommand({
-        schemaVersion: 1, commandId: randomUUID(), actorId, actorSeq: txn.acceptedSeq(actorId) + 1,
+        schemaVersion: 1, commandId, actorId, actorSeq: txn.acceptedSeq(actorId) + 1,
         canvasId, storageEpoch: txn.storageEpoch, baseRevision: txn.revision, kind: body.kind, payload: body.payload,
       });
       return runInTransaction(txn, command, commandHash(command), context);

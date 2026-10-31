@@ -11,6 +11,8 @@ import { dataDir } from "../data-dir";
 import { isSafeCanvasId, loadCanvas } from "../canvas-store";
 import { ensureConversations, finalizeConversations } from "./conversations";
 import type { AgentState } from "./schema";
+import { assertJsonWritable, isSqliteMode } from "../db/storage-mode";
+const sqlRecords = () => import("../db/sql-records");
 
 export class AgentError extends Error {
   constructor(
@@ -107,6 +109,20 @@ export function updateAgent(
     next = l.queue
       .catch(() => {})
       .then(async () => {
+        if (isSqliteMode()) {
+          // P3-08：SQLite 权威模式只写数据库；只保存变化的会话。
+          const loaded = isSafeCanvasId(id) ? await (await sqlRecords()).loadAgentSql(id) : null;
+          if (!loaded) throw new AgentError("画布不存在", 404);
+          const { state } = loaded;
+          const loadedActive = state.activeConversationId;
+          ensureConversations(state);
+          if (!agentBusy(id)) finalizeConversations(state);
+          await mutate(state);
+          state.updatedAt = new Date().toISOString();
+          await (await sqlRecords()).saveAgentSql(id, state, loaded.loaded, loadedActive);
+          return state;
+        }
+        assertJsonWritable("agent-store.updateAgent");
         const state = await readState(id);
         await mutate(state);
         state.updatedAt = new Date().toISOString();

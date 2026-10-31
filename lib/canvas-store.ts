@@ -4,6 +4,9 @@ import { dataDir } from "./data-dir";
 import { collectCanvasAssets, mergeLibraryAssets, normalizeLibraryAssets, type CanvasLibraryAsset } from "./canvas-library";
 import { cleanCanvas } from "./canvas-cleanup";
 import { bumpVersionsForLegacyWrite, type CanvasCommandState } from "./canvas-runtime/command-state";
+import { assertJsonWritable, isSqliteMode } from "./db/storage-mode";
+/** SQLite 实现只在切换后按需加载：JSON 模式不引入命令服务与数据库模块。 */
+const sqlRecords = () => import("./db/sql-records");
 
 const DATA_DIR = dataDir();
 const CANVASES_DIR = path.join(DATA_DIR, "canvases");
@@ -117,6 +120,8 @@ export function emptyCanvas(id: string): CanvasDoc {
 
 /** Load a canvas; the default canvas is created on first access. */
 export async function loadCanvas(id: string): Promise<CanvasDoc | null> {
+  // P3-08：storage-state 标记为 SQLite 时唯一权威是数据库；旧 JSON 文件只读保留，不再读取。
+  if (isSqliteMode()) return deletedIds.has(id) ? null : (await sqlRecords()).loadCanvasSql(id);
   try {
     const raw = await readFile(canvasPath(id), "utf8");
     return cleanCanvas(JSON.parse(raw) as CanvasDoc);
@@ -139,6 +144,7 @@ export async function saveCanvas(
 ): Promise<CanvasDoc | null> {
   return withCanvasLock(doc.id, async () => {
     if (deletedIds.has(doc.id)) return null;
+    if (isSqliteMode()) return saveCanvasSql(doc, expectedRevision);
     const current = await loadCanvas(doc.id);
     const currentRevision = current?.revision ?? -1;
     if (currentRevision !== expectedRevision) return null;
@@ -146,10 +152,27 @@ export async function saveCanvas(
   });
 }
 
+/** SQLite 模式的旧 PUT：新建画布直接落库；已有画布按 revision 前置条件转成带版本的命令，冲突返回 null（409）。 */
+async function saveCanvasSql(doc: Omit<CanvasDoc, "revision" | "updatedAt">, expectedRevision: number): Promise<CanvasDoc | null> {
+  if (expectedRevision === -1) {
+    if (await (await sqlRecords()).loadCanvasSql(doc.id)) return null;
+    await (await sqlRecords()).createCanvasSql(doc.id, doc.name, doc.viewport);
+    if (!doc.nodes.length && !doc.edges.length && !doc.libraryAssets?.length) return (await sqlRecords()).loadCanvasSql(doc.id);
+    expectedRevision = 0;
+  }
+  try {
+    return await (await sqlRecords()).transformCanvasSql(doc.id, current => ({ ...current, name: doc.name, viewport: doc.viewport, nodes: doc.nodes, edges: doc.edges, ...(doc.libraryAssets !== undefined ? { libraryAssets: doc.libraryAssets } : {}) }), { access: "user", expectedRevision });
+  } catch (error) {
+    if ((await sqlRecords()).isConflict(error)) return null;
+    throw error;
+  }
+}
+
 type WriteMode = { command: boolean; bumpRevision: boolean };
 const LEGACY_WRITE: WriteMode = { command: false, bumpRevision: true };
 
 async function writeCanvas(doc: Omit<CanvasDoc, "revision" | "updatedAt">, current: CanvasDoc | null, revision: number, mode: WriteMode = LEGACY_WRITE): Promise<CanvasDoc> {
+  assertJsonWritable("canvas-store.writeCanvas");
   let libraryAssets = mergeLibraryAssets(normalizeLibraryAssets(current?.libraryAssets), normalizeLibraryAssets(doc.libraryAssets));
   libraryAssets = mergeLibraryAssets(libraryAssets, collectCanvasAssets(doc.nodes, doc.createdAt, libraryAssets));
   const appliedOperationIds = [...new Set([...(current?.appliedOperationIds ?? []), ...(doc.appliedOperationIds ?? [])])];
@@ -186,10 +209,14 @@ export async function updateCanvas(id: string, edit: (doc: CanvasDoc) => void | 
   });
 }
 
-/** 不可变命令入口，与旧修改入口共用写锁；返回原引用表示已处理，不再写盘。 */
-export async function transformCanvas(id: string, edit: (doc: CanvasDoc) => CanvasDoc): Promise<CanvasDoc | null> {
+/**
+ * 不可变命令入口，与旧修改入口共用写锁；返回原引用表示已处理，不再写盘。
+ * SQLite 模式：实体差异转为带前置版本的命令，画布字段单独写入；access="user" 用于旧客户端协议（只允许用户字段）。
+ */
+export async function transformCanvas(id: string, edit: (doc: CanvasDoc) => CanvasDoc, options: { access?: "user" | "service" } = {}): Promise<CanvasDoc | null> {
   return withCanvasLock(id, async () => {
     if (deletedIds.has(id)) return null;
+    if (isSqliteMode()) return (await sqlRecords()).transformCanvasSql(id, edit, { access: options.access ?? "service" });
     const current = await loadCanvas(id);
     if (!current) return null;
     const next = edit(current);
@@ -205,6 +232,7 @@ export async function transformCanvas(id: string, edit: (doc: CanvasDoc) => Canv
  * 只持久化 commandState，不改变对外可见的 revision。画布不存在或已删除时返回 null。
  */
 export async function commitCommandWrite<T>(id: string, edit: (doc: CanvasDoc) => { next: CanvasDoc | null; bumpRevision: boolean; result: T }): Promise<{ saved: CanvasDoc; result: T } | null> {
+  assertJsonWritable("canvas-store.commitCommandWrite");
   return withCanvasLock(id, async () => {
     if (deletedIds.has(id)) return null;
     const current = await loadCanvas(id);
@@ -228,6 +256,7 @@ export async function createCanvas(): Promise<CanvasDoc> {
 
 /** All canvas summaries, newest first by creation time. Corrupt files are skipped. */
 export async function listCanvases(): Promise<CanvasSummary[]> {
+  if (isSqliteMode()) return (await sqlRecords()).listCanvasesSql();
   await mkdir(CANVASES_DIR, { recursive: true });
   const files = (await readdir(CANVASES_DIR)).filter((file) => file.endsWith(".json"));
   const summaries: CanvasSummary[] = [];
@@ -244,6 +273,7 @@ export async function listCanvases(): Promise<CanvasSummary[]> {
 }
 
 export async function loadLastCanvasId(): Promise<string | null> {
+  if (isSqliteMode()) return (await sqlRecords()).loadLastCanvasIdSql();
   try {
     const raw = await readFile(APP_STATE_FILE, "utf8");
     const parsed = JSON.parse(raw) as { lastCanvasId?: unknown };
@@ -263,6 +293,8 @@ export function saveLastCanvasId(id: string): Promise<void> {
 }
 
 async function writeLastCanvasId(id: string): Promise<void> {
+  if (isSqliteMode()) return (await sqlRecords()).saveLastCanvasIdSql(id);
+  assertJsonWritable("canvas-store.writeLastCanvasId");
   await mkdir(DATA_DIR, { recursive: true });
   const tmp = `${APP_STATE_FILE}.${crypto.randomUUID()}.tmp`;
   try {
@@ -275,6 +307,8 @@ async function writeLastCanvasId(id: string): Promise<void> {
 export async function deleteCanvas(id: string, canDelete?: () => boolean): Promise<boolean> {
   return withCanvasLock(id, async () => {
     if (canDelete && !canDelete()) throw new Error("画布 Agent 正在运行，请先停止");
+    if (isSqliteMode()) { const removed = await (await sqlRecords()).deleteCanvasSql(id); deletedIds.add(id); return removed; }
+    assertJsonWritable("canvas-store.deleteCanvas");
     try {
       await unlink(canvasPath(id));
       deletedIds.add(id);
