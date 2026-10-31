@@ -67,15 +67,15 @@ export function validAgentLink(source: { type: string }, target: { type: string 
  * 计算新增节点（不写库）：有上游或未给坐标的节点按左→右流程排布（layoutFlowNodes），
  * 只有显式给了坐标且没有上游的节点才按坐标就近避让。返回节点与要新建的连线。
  */
-export function planAgentNodes(c: CanvasDoc, items: AgentNodeInput[]): { nodes: CanvasNode[]; links: AgentLink[] } {
+export function planAgentNodes(c: CanvasDoc, items: AgentNodeInput[], idFor: (index: number) => string = () => crypto.randomUUID()): { nodes: CanvasNode[]; links: AgentLink[] } {
   const existing = c.nodes as CanvasNode[];
   const byRef = new Map<string, string>();
-  const drafts = items.map((item) => {
+  const drafts = items.map((item, index) => {
     const size = item.type === "canvasText"
       ? { width: Math.min(item.width ?? 360, AGENT_TEXT_MAX_WIDTH), height: Math.min(item.height ?? 260, AGENT_TEXT_MAX_HEIGHT) }
       : undefined;
     const n: CanvasNode = {
-      id: crypto.randomUUID(),
+      id: idFor(index),
       type: item.type,
       position: { x: item.x ?? 0, y: item.y ?? 0 },
       ...(size ?? {}),

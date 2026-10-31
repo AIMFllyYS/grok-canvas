@@ -15,7 +15,7 @@ import {
   MessageResponse,
 } from "@/components/ai-elements/message";
 import { Reasoning } from "@/components/ai-elements/reasoning";
-import { Tool, ToolNodeNames, collectNodeNames } from "@/components/ai-elements/tool";
+import { Tool, ToolNodeNames, ToolRecords, collectNodeNames, type ToolRecordView } from "@/components/ai-elements/tool";
 import { AgentGlyph } from "./icons";
 import { AgentComposer } from "./composer";
 import { ModelPicker } from "./model-picker";
@@ -301,6 +301,19 @@ function Chat({
     }
   }, [messages, busy, canvasId]);
   useEffect(() => () => { previewScheduler.cancelPrefix(`${canvasId}:`); previewStore.clearCanvas(canvasId); }, [canvasId]);
+  // P5-04：空闲时读取工具调用的持久状态（读取即收敛中断的调用），中断的工具卡片据此显示真实结果。
+  const [toolRecords, setToolRecords] = useState<ReadonlyMap<string, ToolRecordView>>(() => new Map());
+  useEffect(() => {
+    if (busy) return;
+    let stopped = false;
+    void fetch(`/api/agent/tool-calls?canvasId=${encodeURIComponent(canvasId)}`, { cache: "no-store" })
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { records?: Array<{ toolCallId: string } & ToolRecordView> } | null) => {
+        if (!stopped && d?.records) setToolRecords(new Map(d.records.map(r => [r.toolCallId, { phase: r.phase, ...(r.summary ? { summary: r.summary } : {}), ...(r.error ? { error: r.error } : {}) }])));
+      })
+      .catch(() => {});
+    return () => { stopped = true; };
+  }, [busy, canvasId]);
   useEffect(() => {
     onBusy(busy);
     return () => {};
@@ -371,9 +384,11 @@ function Chat({
               加载更早的 {Math.min(windowed.hidden, MESSAGE_PAGE)} 条消息（还有 {windowed.hidden} 条）
             </button>
           )}
+          <ToolRecords.Provider value={toolRecords}>
           {windowed.items.map((m) => (
             <ChatMessage key={m.id} message={m} animating={busy && m.id === lastId} nodeNames={nodeNames} />
           ))}
+          </ToolRecords.Provider>
           {status === "submitted" && (
             <div className="agent-status">
               <LoaderCircle size={13} className="animate-spin" />

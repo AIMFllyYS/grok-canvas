@@ -184,10 +184,18 @@ test("Markdown 排版：段落之间有间距，单换行按换行显示；Agent
   assert.ok(instructions.endsWith("当前画布ID：c1"));
 });
 
+/** 工具 execute 可能是 async generator（P5-01 阶段作为 preliminary 结果）：和 SDK 一样取最后一次 yield。 */
+async function runTool(t, input, options) {
+  const result = t.execute(input, options);
+  if (!result || typeof result[Symbol.asyncIterator] !== "function") return result;
+  let last;
+  for await (const value of result) last = value;
+  return last;
+}
 test("工具执行：add_canvas_nodes 用 from 一次提交节点与连线并排成流程；arrange_canvas_nodes 只移动指定节点", async () => {
   const doc = await store.module.createCanvas();
   const tools = agent.module.createCanvasTools(doc.id, "http://127.0.0.1:1");
-  const result = await tools.add_canvas_nodes.execute({ nodes: [
+  const result = await runTool(tools.add_canvas_nodes, { nodes: [
     { type: "canvasText", name: "大纲", prompt: "", content: "一句话", ref: "o" },
     { type: "canvasText", name: "分镜", prompt: "", content: "## 分镜", ref: "s", from: ["o"] },
     { type: "image", name: "镜头一", prompt: "a", ref: "i1", from: ["s"] },
@@ -205,8 +213,8 @@ test("工具执行：add_canvas_nodes 用 from 一次提交节点与连线并排
   // 打乱一个节点后整理：只动指定节点，结果回到对齐位置。
   const shot = byName["镜头二"];
   const expected = { ...shot.position };
-  await tools.edit_canvas_nodes.execute({ updates: [{ id: shot.id, x: -3000, y: 4000 }], remove: [], connect: [], disconnect: [] }, { toolCallId: "t2", messages: [] });
-  const arranged = await tools.arrange_canvas_nodes.execute({ nodeIds: saved.nodes.map(n => n.id) }, { toolCallId: "t3", messages: [] });
+  await runTool(tools.edit_canvas_nodes, { updates: [{ id: shot.id, x: -3000, y: 4000 }], remove: [], connect: [], disconnect: [] }, { toolCallId: "t2", messages: [] });
+  const arranged = await runTool(tools.arrange_canvas_nodes, { nodeIds: saved.nodes.map(n => n.id) }, { toolCallId: "t3", messages: [] });
   assert.ok(arranged.moved >= 1);
   const after = await store.module.loadCanvas(doc.id);
   const again = Object.fromEntries(after.nodes.map(n => [n.data.name, n]));
