@@ -27,9 +27,8 @@ export const formatIssue = (issue: RegistryIssue): string =>
 
 export const TEXT_LIMITS = { content: 100_000, prompt: 12_000, name: 512, message: 4_000 } as const;
 export const GEOMETRY_LIMITS = { coordinate: 1e9, size: 1e6 } as const;
-/** 旧行为：用户缩放由 NodeResizer 限定；Agent 写入时夹到 560×1120（lib/agent/canvas.ts）。 */
-export const TEXT_GEOMETRY = { minWidth: 200, minHeight: 120, maxWidth: 3000, maxHeight: 3000, agentMaxWidth: 560, agentMaxHeight: 1120 } as const;
-const TEXT_DEFAULT_SIZE = { width: 360, height: 260 } as const;
+export { TEXT_GEOMETRY, fitTextNodeHeight, agentTextHeight } from "./text-size";
+import { TEXT_DEFAULT_SIZE, TEXT_GEOMETRY } from "./text-size";
 /** 未测量的媒体节点按 node-placement 的回退尺寸处理。 */
 const MEDIA_DEFAULT_SIZE = { width: 280, height: 240 } as const;
 

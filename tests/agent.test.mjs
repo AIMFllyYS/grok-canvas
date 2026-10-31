@@ -164,7 +164,8 @@ test("Text nodes retain content and dimensions, avoid occupied space, and connec
   canvas.module.editNodes(c, { updates: [{ id: text.id, content: "## 更新", width: 640, height: 420 }], remove: [], connect: pairs.map(([source, target]) => ({ source, target })), disconnect: [] });
   assert.equal(text.id, c.nodes.find(n => n.id === text.id).id);
   const updated = c.nodes.find(n => n.id === text.id);
-  assert.deepEqual([updated.data.content, updated.width, updated.height], ["## 更新", 560, 420]);
+  // 高度不超过正文所需：一行标题只需最小高度。
+  assert.deepEqual([updated.data.content, updated.width, updated.height], ["## 更新", 560, 120]);
   assert.equal(c.edges.length, pairs.length);
   assert.deepEqual(generation.module.canvasVideoBody("test", c.nodes.find(n => n.id === "video"), c).inputs, []);
   const cleaned = cleanup.module.cleanCanvas(c);
@@ -174,17 +175,32 @@ test("Text nodes retain content and dimensions, avoid occupied space, and connec
 
 test("Agent text sizing is bounded without changing user-sized dimensions on content edits", () => {
   const c = { nodes: [], edges: [] };
-  const [node] = canvas.module.addNodes(c, [{ type: "canvasText", prompt: "", content: "原文", width: 900, height: 2000 }]);
-  assert.deepEqual([node.data.name, node.width, node.height], ["文稿", 560, 1120]);
+  const long = "长段落".repeat(800);
+  const [node] = canvas.module.addNodes(c, [{ type: "canvasText", prompt: "", content: long, width: 900, height: 2000 }]);
+  assert.deepEqual([node.data.name, node.width, node.height], ["文稿", 560, 800]);
   node.width = 900;
   node.height = 1500;
   const edit = updates => canvas.module.editNodes(c, { updates, remove: [], connect: [], disconnect: [] });
-  edit([{ id: node.id, content: "更新", x: 100 }]);
-  assert.deepEqual([c.nodes[0].width, c.nodes[0].height, c.nodes[0].data.content], [900, 1500, "更新"]);
+  edit([{ id: node.id, content: long, x: 100 }]);
+  assert.deepEqual([c.nodes[0].width, c.nodes[0].height, c.nodes[0].data.content], [900, 1500, long], "只改正文不动用户尺寸");
   edit([{ id: node.id, width: 800 }]);
   assert.deepEqual([c.nodes[0].width, c.nodes[0].height], [560, 1500]);
   edit([{ id: node.id, height: 2000 }]);
-  assert.deepEqual([c.nodes[0].width, c.nodes[0].height], [560, 1120]);
-  edit([{ id: node.id, width: 480, height: 800 }]);
-  assert.deepEqual([c.nodes[0].width, c.nodes[0].height], [480, 800]);
+  assert.deepEqual([c.nodes[0].width, c.nodes[0].height], [560, 800]);
+  edit([{ id: node.id, width: 480, height: 700 }]);
+  assert.deepEqual([c.nodes[0].width, c.nodes[0].height], [480, 700]);
+});
+
+test("Agent 文本高度按正文适配：短文不被拉到上限，空正文用默认高度，长文到上限后滚动", () => {
+  const c = { nodes: [], edges: [] };
+  const [short, empty, long] = canvas.module.addNodes(c, [
+    { type: "canvasText", prompt: "", content: "# 标题\n\n一句话。", width: 520, height: 1120 },
+    { type: "canvasText", prompt: "", content: "" },
+    { type: "canvasText", prompt: "", content: "长".repeat(5000) },
+  ]);
+  assert.ok(short.height < 160, `短文高度 ${short.height}`);
+  assert.equal(empty.height, 260);
+  assert.equal(long.height, 800);
+  canvas.module.editNodes(c, { updates: [{ id: short.id, height: 1000 }], remove: [], connect: [], disconnect: [] });
+  assert.ok(c.nodes.find(n => n.id === short.id).height < 160, "改高度也不超过正文所需");
 });

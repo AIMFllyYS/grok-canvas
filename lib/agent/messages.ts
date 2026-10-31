@@ -17,6 +17,22 @@ export function normalizeMessages<T extends UIMessage>(
   });
 }
 
+/**
+ * 流式回复里“看不见的等待”：xAI 的工具参数整段一次下发，模型写长文时前端收不到任何增量。
+ * 最后一个可见片段已结束（或还没有片段）时返回提示文字；正在输出文字/推理、工具正在运行时返回 null。
+ */
+export function pendingActivity(messages: readonly UIMessage[], status: string): string | null {
+  if (status === "submitted") return "正在连接 Grok…";
+  if (status !== "streaming") return null;
+  const last = messages.at(-1);
+  const parts = last?.role === "assistant" ? last.parts.filter((part) => part.type !== "step-start") : [];
+  const part = parts.at(-1) as { type: string; state?: string; preliminary?: boolean } | undefined;
+  if (!part) return "Grok 正在思考…";
+  if ((part.type === "text" || part.type === "reasoning") && part.state === "streaming") return null;
+  if (part.type.startsWith("tool-") && (part.state === "input-streaming" || part.state === "input-available" || part.preliminary)) return null;
+  return "Grok 正在生成下一步，撰写长文本需要一点时间…";
+}
+
 /** A stopped stream must not leave a perpetual running tool in saved history. */
 export function finalizeInterruptedMessages<T extends UIMessage>(
   messages: T[],

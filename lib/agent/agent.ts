@@ -109,7 +109,7 @@ export function createCanvasTools(canvasId: string, origin: string, runId = "loc
     }),
     add_canvas_nodes: tool({
       description:
-        "批量创建文本、图片或视频节点（不立即生成），并可同时连线。文本类型为 canvasText，默认名为文稿，正文用 content；文本宽度最多 560、高度最多 1120，超出时按上限调整。用 from 写上游（已有节点 ID 或本批条目的 ref）：工具会创建连线，并把节点自动排成从左到右的流程（上游在左；同一上游的多个下游竖排等距、居中对齐上游），自动避让已有节点。不要填写 x/y，除非用户指定了具体位置；没有上游的新节点放在已有内容下方。",
+        "批量创建文本、图片或视频节点（不立即生成），并可同时连线。文本类型为 canvasText，默认名为文稿，正文用 content；一般不填 width/height，高度会按正文自动适配（最多 800，长文在节点内滚动），宽度默认 360、最多 560。用 from 写上游（已有节点 ID 或本批条目的 ref）：工具会创建连线，并把节点自动排成从左到右的流程（上游在左；同一上游的多个下游竖排等距、居中对齐上游），自动避让已有节点。不要填写 x/y，除非用户指定了具体位置；没有上游的新节点放在已有内容下方。",
       inputSchema: z.object({
         nodes: z
           .array(
@@ -169,7 +169,7 @@ export function createCanvasTools(canvasId: string, origin: string, runId = "loc
     }),
     edit_canvas_nodes: tool({
       description:
-        "修改节点名称、文本内容和尺寸、媒体提示词以及连线；设置文本宽度最多 560、高度最多 1120，超出时按上限调整；未指定的尺寸保持不变。涉及文本的连线只表示关系，不作为生成参考。改了连线后用 arrange_canvas_nodes 整理受影响的节点，不要手算坐标；只有用户指定位置时才写 x/y。仅在用户明确要求时删除节点。",
+        "修改节点名称、文本内容和尺寸、媒体提示词以及连线；一般不需要改尺寸；设置的文本宽度最多 560，高度最多 800 且不超过正文所需；未指定的尺寸保持不变。涉及文本的连线只表示关系，不作为生成参考。改了连线后用 arrange_canvas_nodes 整理受影响的节点，不要手算坐标；只有用户指定位置时才写 x/y。仅在用户明确要求时删除节点。",
       inputSchema: z.object({
         updates: z
           .array(
@@ -275,7 +275,8 @@ export function createCanvasTools(canvasId: string, origin: string, runId = "loc
                 id: slot.asset?.name ?? crypto.randomUUID(),
                 status: slot.status,
                 assetName: slot.asset?.name ?? null,
-                error: slot.error,
+                // 命令校验不接受 undefined：成功槽位不带 error 字段。
+                ...(slot.error !== undefined ? { error: slot.error } : {}),
               }),
             ),
             primaryResultId: success.asset.name,
@@ -362,7 +363,7 @@ export const AGENT_INSTRUCTIONS = (canvasId: string) => [
   "- 不要自己给 x/y 坐标，也不要把节点放在已有节点上；只有用户明确指定位置时才写坐标。",
   "- 一次创建一整条流程时放在同一次 add_canvas_nodes 调用里，按上游到下游的顺序列出。",
   "- 给已有节点补连线或调整关系后，用 arrange_canvas_nodes 整理你创建的或用户要求整理的节点；不要移动用户手动摆放、与本次任务无关的节点。",
-  "- 可以创建文本节点保存 Markdown 脚本、构思和规划，默认名称为文稿；长脚本按有意义的章节拆成多个节点，按顺序竖排在同一列。文本宽度最多 560、高度最多 1120，完整内容可在节点内滚动；按内容长短设置尺寸，修改正文时不要改用户手动设置的尺寸。",
+  "- 可以创建文本节点保存 Markdown 脚本、构思和规划，默认名称为文稿；长脚本按有意义的章节拆成多个节点，按顺序竖排在同一列。创建文本节点时不要填写 width/height，高度会按正文自动适配，长文在节点内滚动；修改正文时不要改用户手动设置的尺寸。",
   "- 文本节点连线仅表达关系，不自动补充生成提示词或参考素材。不要创建工作流节点。",
   "",
   "## 回复排版",

@@ -6,6 +6,7 @@
  * - edit_canvas_nodes：要修改的节点叠「正在修改」标记，要删除的节点叠「待删除」标记，都不改正式文档。
  */
 import type { PreviewEntry } from "../canvas-runtime/preview-store";
+import { agentTextHeight } from "../canvas-runtime/text-size";
 
 export const PARTIAL_MERGE_MS = 100;
 export const PREVIEW_EXCERPT = 512;
@@ -30,7 +31,8 @@ export function addEntries(canvasId: string, toolCallId: string, input: unknown)
       label: typeof node.name === "string" && node.name.trim() ? node.name.slice(0, 160) : DEFAULT_NAME[type],
       x: explicit ? (node.x as number) : 0, y: explicit ? (node.y as number) : 0,
       width: typeof node.width === "number" ? Math.min(Math.max(node.width, 200), 560) : size.width,
-      height: typeof node.height === "number" ? Math.min(Math.max(node.height, 120), 1120) : size.height,
+      height: type === "canvasText" ? agentTextHeight(typeof node.height === "number" ? node.height : undefined, typeof node.content === "string" ? node.content : "", typeof node.width === "number" ? Math.min(Math.max(node.width, 200), 560) : size.width)
+        : typeof node.height === "number" ? Math.min(Math.max(node.height, 120), 1120) : size.height,
       status: "pending",
       explicit,
       ...(typeof node.ref === "string" ? { ref: node.ref } : {}),

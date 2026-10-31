@@ -4,9 +4,11 @@ import { createPlacementIndex, flowNodeSize, layoutFlowNodes, placeNewNode } fro
 import { AgentError } from "./store";
 import { diffCanvasOperations } from "../canvas-operations";
 import { editLeaseActive } from "../canvas-edit-leases";
+import { agentTextHeight } from "../canvas-runtime/text-size";
 // The standard media-node reference is 280 canvas units.
 export const AGENT_TEXT_MAX_WIDTH = 560;
-export const AGENT_TEXT_MAX_HEIGHT = 1120;
+export const AGENT_TEXT_MAX_HEIGHT = 800;
+const TEXT_DEFAULT = { width: 360, height: 260 };
 export type CanvasNode = {
   id: string;
   type: string;
@@ -71,9 +73,8 @@ export function planAgentNodes(c: CanvasDoc, items: AgentNodeInput[], idFor: (in
   const existing = c.nodes as CanvasNode[];
   const byRef = new Map<string, string>();
   const drafts = items.map((item, index) => {
-    const size = item.type === "canvasText"
-      ? { width: Math.min(item.width ?? 360, AGENT_TEXT_MAX_WIDTH), height: Math.min(item.height ?? 260, AGENT_TEXT_MAX_HEIGHT) }
-      : undefined;
+    const width = Math.min(item.width ?? TEXT_DEFAULT.width, AGENT_TEXT_MAX_WIDTH);
+    const size = item.type === "canvasText" ? { width, height: agentTextHeight(item.height, item.content ?? "", width) } : undefined;
     const n: CanvasNode = {
       id: idFor(index),
       type: item.type,
@@ -186,7 +187,7 @@ export function editNodes(
       if (n.type !== "canvasText") throw new AgentError("仅文本节点支持正文和调整尺寸");
       if (u.content !== undefined) n.data.content = u.content;
       if (u.width !== undefined) n.width = Math.min(u.width, AGENT_TEXT_MAX_WIDTH);
-      if (u.height !== undefined) n.height = Math.min(u.height, AGENT_TEXT_MAX_HEIGHT);
+      if (u.height !== undefined) n.height = agentTextHeight(u.height, String(n.data.content ?? ""), n.width ?? TEXT_DEFAULT.width);
     }
     if (u.prompt !== undefined) {
       if (!["image", "video"].includes(n.type))
