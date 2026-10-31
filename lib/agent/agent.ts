@@ -275,7 +275,8 @@ export function createCanvasTools(canvasId: string, origin: string, runId = "loc
                 id: slot.asset?.name ?? crypto.randomUUID(),
                 status: slot.status,
                 assetName: slot.asset?.name ?? null,
-                error: slot.error,
+                // 命令校验不接受 undefined：成功槽位不带 error 字段。
+                ...(slot.error !== undefined ? { error: slot.error } : {}),
               }),
             ),
             primaryResultId: success.asset.name,

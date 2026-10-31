@@ -195,6 +195,14 @@ export type AgentEdit = {
 
 /** Agent 编辑：在锁内按当前版本构造补丁、移动、删除与连线，一条 batch 原子提交。 */
 export async function agentEditNodes(canvasId: string, edit: AgentEdit, limits: { maxTextWidth: number; maxTextHeight: number }): Promise<CommitReceipt | null> {
+  // 新连线 ID 在 build 外按端点固定：SQL 仓库遇到读集缺失会重跑 build，每次换新 ID 会永远读不到、无限补读。
+  const edgeIds = new Map<string, string>();
+  const edgeIdFor = (source: string, target: string) => {
+    const key = `${source}\u0000${target}`;
+    let id = edgeIds.get(key);
+    if (!id) edgeIds.set(key, id = crypto.randomUUID());
+    return id;
+  };
   return runAgent(canvasId, (reader) => {
     const items: BatchItem[] = [];
     const patches: Array<{ nodeId: string; field: string; expectedVersion: number; value: unknown }> = [];
@@ -242,7 +250,7 @@ export async function agentEditNodes(canvasId: string, edit: AgentEdit, limits: 
       if (!textLink && target.data.status === "running") throw new AgentCommandError("目标节点正在生成", 400);
       const exists = reader.outgoingEdgeIds(source.id).some(id => reader.getEdge(id)?.target === target.id && !edit.disconnect.includes(id));
       if (exists || adds.some(edge => edge.source === source.id && edge.target === target.id)) continue;
-      adds.push({ id: crypto.randomUUID(), canvasId, source: source.id, target: target.id, role: !textLink && target.type === "video" ? link.role ?? "reference" : null, version: 0 });
+      adds.push({ id: edgeIdFor(source.id, target.id), canvasId, source: source.id, target: target.id, role: !textLink && target.type === "video" ? link.role ?? "reference" : null, version: 0 });
     }
     if (edgeRemovals.length) items.push({ kind: "edit_edges", payload: { add: [], remove: edgeRemovals } });
     if (edit.remove.length) items.push({ kind: "delete_nodes", payload: { items: edit.remove.map(id => ({ nodeId: id, expectedEntityVersion: reader.getNode(id)!.entityVersion })) } });
@@ -263,6 +271,16 @@ export async function agentPatchFields(canvasId: string, nodeId: string, fields:
   });
 }
 
+/** 补丁来自上游接口的形状，可选字段常为 undefined；命令校验拒绝 undefined，提交前去掉这些键。 */
+function withoutUndefined(value: Record<string, unknown>): Record<string, unknown> {
+  const strip = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(strip);
+    if (!item || typeof item !== "object") return item;
+    return Object.fromEntries(Object.entries(item).filter(([, child]) => child !== undefined).map(([key, child]) => [key, strip(child)]));
+  };
+  return strip(value) as Record<string, unknown>;
+}
+
 /** Agent 触发的生成（服务端自己调用生成接口，结果可信）：开始/结果/失败/任务 ID 都是 apply_generation。 */
 export async function agentGenerationWrite(canvasId: string, nodeId: string, generationId: string, patch: Record<string, unknown>, mode: "start" | "result" | "fail"): Promise<ServiceWriteResult> {
   try {
@@ -274,7 +292,7 @@ export async function agentGenerationWrite(canvasId: string, nodeId: string, gen
       const claim = claimOf(reader, nodeId);
       if (mode !== "start" && node.data.generationId !== generationId) throw new AgentCommandError("节点已有更新的生成任务", 409);
       if (claim && claim.id !== generationId) throw new AgentCommandError("生成任务已不再属于该节点", 409);
-      return { kind: "apply_generation", payload: { nodeId, generationId, claimId: generationId, assets: [], patch, mode } };
+      return { kind: "apply_generation", payload: { nodeId, generationId, claimId: generationId, assets: [], patch: withoutUndefined(patch), mode } };
     }, { origin: "agent" });
     if (!existed) throw new AgentCommandError("节点已删除", 409);
     return statusOf(receipt, nodeId, existed);
