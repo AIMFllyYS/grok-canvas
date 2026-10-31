@@ -247,15 +247,15 @@ test("粘贴副本写入文本/素材节点的生成状态字段作为旧数据�
   assert.throws(() => validateNodeData("canvasText", { name: "文本", status: "running?" }));
 });
 
-test("文本几何与旧行为一致：用户 200x120..3000x3000，Agent 上限 560x1120", async () => {
-  assert.deepEqual(TEXT_GEOMETRY, { minWidth: 200, minHeight: 120, maxWidth: 3000, maxHeight: 3000, agentMaxWidth: 560, agentMaxHeight: 1120 });
+test("文本几何与旧行为一致：用户 200x120..3000x3000，Agent 上限 560x800", async () => {
+  assert.deepEqual(TEXT_GEOMETRY, { minWidth: 200, minHeight: 120, maxWidth: 3000, maxHeight: 3000, agentMaxWidth: 560, agentMaxHeight: 800 });
   const agentSource = await readFile(new URL("../lib/agent/canvas.ts", import.meta.url), "utf8");
   assert.match(agentSource, /AGENT_TEXT_MAX_WIDTH = 560;/);
-  assert.match(agentSource, /AGENT_TEXT_MAX_HEIGHT = 1120;/);
+  assert.match(agentSource, /AGENT_TEXT_MAX_HEIGHT = 800;/);
   const textSource = await readFile(new URL("../components/canvas/text-node.tsx", import.meta.url), "utf8");
   assert.match(textSource, /minWidth=\{200\} minHeight=\{120\} maxWidth=\{3000\} maxHeight=\{3000\}/);
-  assert.deepEqual(clampAgentTextSize({ width: 900, height: 2000 }), { width: 560, height: 1120 });
-  assert.deepEqual(clampAgentTextSize({ width: 480, height: 800 }), { width: 480, height: 800 });
+  assert.deepEqual(clampAgentTextSize({ width: 900, height: 2000 }), { width: 560, height: 800 });
+  assert.deepEqual(clampAgentTextSize({ width: 480, height: 700 }), { width: 480, height: 700 });
   assert.deepEqual(clampAgentTextSize({}, { width: 900, height: 1500 }), { width: 900, height: 1500 });
   assert.deepEqual(clampAgentTextSize({ width: 800 }, { width: 900, height: 1500 }), { width: 560, height: 1500 });
   assert.doesNotThrow(() => validateNodeGeometry("canvasText", geometry(0, 0, 3000, 3000)));

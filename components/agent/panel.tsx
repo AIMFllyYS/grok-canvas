@@ -21,7 +21,7 @@ import { AgentComposer } from "./composer";
 import { ModelPicker } from "./model-picker";
 import { FloatingAgent } from "./floating-agent";
 import type { AgentState, AgentSettings, Attachment } from "@/lib/agent/schema";
-import { finalizeInterruptedMessages } from "@/lib/agent/messages";
+import { finalizeInterruptedMessages, pendingActivity } from "@/lib/agent/messages";
 import { bridgeToolPart, previewStore } from "@/lib/canvas-runtime/preview-store";
 import { createScheduler } from "@/lib/canvas-runtime/scheduler";
 import { createFreezer, MESSAGE_PAGE, windowMessages } from "@/lib/agent/conversation-controller";
@@ -274,6 +274,8 @@ function Chat({
   });
   const busy = status === "streaming" || status === "submitted",
     disabled = switching || uploading;
+  // 片段之间没有增量时（模型在写长参数）也要有进行中的提示，否则看起来像卡住。
+  const activity = pendingActivity(messages, status);
   // P4-06：隐藏的面板冻结显示快照（useChat 继续接收，任务照常运行）；只渲染最后 50 条，可加载更早。
   const [freeze] = useState(() => createFreezer<typeof messages>());
   const displayed = freeze(messages, visible);
@@ -389,10 +391,10 @@ function Chat({
             <ChatMessage key={m.id} message={m} animating={busy && m.id === lastId} nodeNames={nodeNames} />
           ))}
           </ToolRecords.Provider>
-          {status === "submitted" && (
-            <div className="agent-status">
+          {activity && (
+            <div className="agent-status" role="status" aria-live="polite">
               <LoaderCircle size={13} className="animate-spin" />
-              正在连接 Grok…
+              {activity}
             </div>
           )}
           {(error || localError) && (

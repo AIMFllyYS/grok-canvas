@@ -6,7 +6,21 @@ import { loadTypescript } from "./helpers/load-typescript.mjs";
 const previews = await loadTypescript("lib/canvas-runtime/preview-store.ts");
 const coordinator = await loadTypescript("lib/canvas-runtime/preview-coordinator.ts");
 const input = await loadTypescript("lib/agent/preview-input.ts");
-after(async () => { await previews.dispose(); await coordinator.dispose(); await input.dispose(); });
+const messagesLib = await loadTypescript("lib/agent/messages.ts");
+after(async () => { await previews.dispose(); await coordinator.dispose(); await input.dispose(); await messagesLib.dispose(); });
+
+test("面板进行中提示：两个片段之间（模型在写整段工具参数）也显示；正在输出或工具在运行时不重复显示", () => {
+  const { pendingActivity } = messagesLib.module;
+  const reply = (...parts) => [{ id: "u", role: "user", parts: [{ type: "text", text: "写脚本" }] }, { id: "a", role: "assistant", parts }];
+  assert.equal(pendingActivity([], "submitted"), "正在连接 Grok…");
+  assert.equal(pendingActivity(reply(), "ready"), null);
+  assert.match(pendingActivity(reply({ type: "step-start" }), "streaming"), /思考/);
+  assert.equal(pendingActivity(reply({ type: "text", text: "好", state: "streaming" }), "streaming"), null);
+  assert.match(pendingActivity(reply({ type: "text", text: "好", state: "done" }), "streaming"), /撰写长文本/);
+  assert.match(pendingActivity(reply({ type: "tool-read_canvas", toolCallId: "t", state: "output-available", output: {} }, { type: "step-start" }), "streaming"), /撰写长文本/);
+  assert.equal(pendingActivity(reply({ type: "tool-add_canvas_nodes", toolCallId: "t", state: "input-available", input: {} }), "streaming"), null);
+  assert.equal(pendingActivity(reply({ type: "tool-generate_image", toolCallId: "t", state: "output-available", preliminary: true, output: {} }), "streaming"), null);
+});
 const { createPreviewStore, bridgeToolPart } = previews.module;
 const { placePreviews } = coordinator.module;
 const { addEntries, editEntries, createPartialGate } = input.module;

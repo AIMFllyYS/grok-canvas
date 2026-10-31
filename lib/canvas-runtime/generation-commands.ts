@@ -18,6 +18,7 @@ import { videoNodePatchFromView } from "../video-runtime";
 import { CommandError, executeServerCommand, type CommandOrigin } from "./command-service";
 import type { CommandTxn } from "./json-repository";
 import { summaryOf, type UserFlowNode } from "./user-actions";
+import { agentTextHeight } from "./text-size";
 import type { AssetRegistration, BatchItem, CommitReceipt, Geometry } from "./types";
 
 export const AGENT_ACTOR_ID = "a9e70000-0000-4000-8000-000000000001";
@@ -228,10 +229,12 @@ export async function agentEditNodes(canvasId: string, edit: AgentEdit, limits: 
       }
       if (update.x !== undefined || update.y !== undefined || update.width !== undefined || update.height !== undefined) {
         const g = node.geometry;
+        const width = update.width !== undefined ? Math.min(update.width, limits.maxTextWidth) : g.width;
+        // Agent 给的高度不超过正文所需：模型常把上限当目标值，节点下半截全是空白。
+        const content = () => update.content ?? (node.documentId ? reader.getDocument(node.documentId)?.content : undefined) ?? "";
         const to = {
-          x: update.x ?? g.x, y: update.y ?? g.y,
-          width: update.width !== undefined ? Math.min(update.width, limits.maxTextWidth) : g.width,
-          height: update.height !== undefined ? Math.min(update.height, limits.maxTextHeight) : g.height,
+          x: update.x ?? g.x, y: update.y ?? g.y, width,
+          height: update.height !== undefined ? Math.min(agentTextHeight(update.height, content(), width), limits.maxTextHeight) : g.height,
         };
         if (to.x !== g.x || to.y !== g.y || to.width !== g.width || to.height !== g.height) moves.push({ nodeId: node.id, expectedVersion: node.geometryVersion, from: { ...g }, to });
       }
