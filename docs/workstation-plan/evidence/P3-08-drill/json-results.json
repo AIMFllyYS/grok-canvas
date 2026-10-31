@@ -1,0 +1,32 @@
+[
+  {
+    "phase": "json",
+    "name": "JSON 模式种子画布写入",
+    "ok": true,
+    "detail": "status 200"
+  },
+  {
+    "phase": "json",
+    "name": "画布在浏览器中加载",
+    "ok": true,
+    "detail": "节点 3"
+  },
+  {
+    "phase": "json",
+    "name": "JSON 模式拖动经命令保存",
+    "ok": true,
+    "detail": "geometryVersion 0→1"
+  },
+  {
+    "phase": "json",
+    "name": "无 5xx 响应",
+    "ok": true,
+    "detail": "[]"
+  },
+  {
+    "phase": "json",
+    "name": "无页面错误",
+    "ok": true,
+    "detail": ""
+  }
+]

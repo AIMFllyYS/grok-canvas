@@ -3,7 +3,7 @@
  * 缺失（missing）与损坏（corrupt）是两种不同结果，不可混淆；未登记路径报 unknown，不静默跳过。
  * OAuth/auth 显式排除，不进入工作站数据库。
  */
-export type ImportKind = "canvas" | "agent" | "studio" | "video-task" | "generation" | "app-state" | "asset" | "auth";
+export type ImportKind = "canvas" | "agent" | "studio" | "video-task" | "generation" | "app-state" | "asset" | "auth" | "control" | "cache";
 export type ImportEntry = {
   kind: ImportKind;
   /** 相对数据目录的路径模式。 */
@@ -61,6 +61,14 @@ export const IMPORT_CATALOG: readonly ImportEntry[] = Object.freeze([
     kind: "asset", pattern: /^assets\/[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/, description: "媒体文件（不存 BLOB，只登记元数据与相对路径）",
     tables: ["assets"], idTransform: "文件名 = assetName；画布归属来自画布的 libraryAssets/commandState.assets，写 canvas_assets",
     checksum: "文件 sha256 与字节数", onMissing: "被画布引用但文件不存在：canvas_assets.missing=1 并报告", onCorrupt: "读取失败：status=missing 并报告，不删除引用",
+  },
+  {
+    kind: "control", pattern: /^(maintenance\.json|storage-state\.json|db\/.+)$/, description: "切换控制文件与切换后的数据库（P3-08）",
+    tables: [], idTransform: "不导入", checksum: "不读取内容", onMissing: "正常", onCorrupt: "不适用", excluded: true,
+  },
+  {
+    kind: "cache", pattern: /^derivatives\/.+$/, description: "可再生的媒体派生缓存（P4-02 缩略图/poster）",
+    tables: [], idTransform: "不导入（按需重新生成）", checksum: "不读取内容", onMissing: "正常", onCorrupt: "不适用", excluded: true,
   },
   {
     kind: "auth", pattern: /^(auth(\.[^/]+)?\.json|oauth[^/]*|\.grok\/.*)$/, description: "OAuth / 登录凭据",

@@ -8,6 +8,8 @@ import { commitCommandWrite, loadCanvas, type CanvasDoc } from "../canvas-store"
 import { emptyCommandState, own, setOwn, deleteOwn, type CanvasCommandState, type NodeVersions, type StoredCommandResult } from "./command-state";
 import { convertLegacyNode, deriveDocumentId, exportLegacyNode, fromCanvasDoc } from "./legacy-document";
 import { isEmptyWriteSet, type EntityReader, type WriteSet } from "./command-reducer";
+import { isSqliteMode } from "../db/storage-mode";
+import { sqlQuery } from "../db/sql-command-repository";
 import type { CommandErrorCode, CommandErrorField, CommitReceipt, Delta, DocumentRecord, EdgeRecord, EdgeRole, NodeSummary } from "./types";
 
 export type CommandRecordMeta = { commandId: string; actorId: string; actorSeq: number; hash: string };
@@ -266,6 +268,8 @@ export type EntitySnapshot = {
 
 /** 带版本的实体快照：供客户端初始化与测试取得 expectedVersion。整图转换，仅用于加载。 */
 export async function loadEntitySnapshot(canvasId: string): Promise<EntitySnapshot | null> {
+  // SQLite 权威：版本、纪元与 actor 水位直接来自数据库（P3-08）。
+  if (isSqliteMode()) return sqlQuery<EntitySnapshot | null>("commands.snapshot", { canvasId });
   const doc = await loadCanvas(canvasId);
   if (!doc) return null;
   const state = doc.commandState ?? emptyCommandState();
