@@ -151,7 +151,8 @@ export async function saveCanvas(
     if (currentRevision !== expectedRevision) return null;
     return writeCanvas(doc, current, currentRevision);
   });
-  if (saved) notifyCanvasChanged({ canvasId: doc.id, revision: saved.revision, actorId: null });
+  // JSON 模式由 writeCanvas 通知；SQLite 模式的新建画布不经命令服务，在此补一次。
+  if (saved && isSqliteMode()) notifyCanvasChanged({ canvasId: doc.id, revision: saved.revision, actorId: null });
   return saved;
 }
 
@@ -223,6 +224,8 @@ async function writeCanvas(doc: Omit<CanvasDoc, "revision" | "updatedAt">, curre
     await writeFile(tmp, `${JSON.stringify(next)}\n`, "utf8");
     await renameWithRetry(tmp, file);
   } finally { await unlink(tmp).catch(() => {}); }
+  // 命令提交由 command-service 带 actor 通知；其余旧路径写入（Agent 字段编辑、生成回写等）在此通知，写入方未知。
+  if (!mode.command) notifyCanvasChanged({ canvasId: next.id, revision: next.revision, actorId: null });
   return next;
 }
 
