@@ -4,7 +4,7 @@ import { memo } from "react";
 import { sameNodeView } from "@/lib/canvas-runtime/node-view";
 import { NodeResizer, Position, type Node, type NodeProps } from "@xyflow/react";
 import { FileText } from "lucide-react";
-import { MessageResponse } from "@/components/ai-elements/message";
+import { DocumentReader } from "./document-reader";
 import { NodeSurface } from "@/components/ui/node-surface";
 import { NodeActions } from "./node-actions";
 import { NodeTitle } from "./node-title";
@@ -28,7 +28,7 @@ export const TextNode = memo(function TextNode({ id, data, selected, draggable }
       {/* 正文占比铺满卡片，所以不能再标 .nodrag：React Flow 会丢弃落在 .nodrag 元素内的按下点，
           整块标注就等于只剩 16px 内边距和标题条能拖。滚动改由 nowheel 保证。 */}
       <div className="nowheel h-full overflow-auto text-sm text-foreground" aria-label="文本节点内容">
-        <MessageResponse mode="static">{data.content || ""}</MessageResponse>
+        <DocumentReader documentKey={id} content={data.content || ""} />
       </div>
     </NodeSurface>
   </div>;

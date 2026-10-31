@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { createContext, useContext, useState } from "react";
 import { ParameterView } from "@/components/agent/parameter-view";
+import { AssetImage } from "@/components/ui/asset-image";
 import { compactValue, summarizeTool } from "./tool-summary";
 export { collectNodeNames } from "./tool-summary";
 
@@ -78,7 +79,7 @@ export function Tool({ part }: { part: ToolUIPart }) {
           <>
             <div className="agent-eyebrow">结果</div>
             {asset && /\.(png|jpe?g|webp)$/i.test(asset) ? (
-              <img src={`/api/assets/${encodeURIComponent(asset)}`} alt="生成图片" />
+              <AssetImage src={`/api/assets/${encodeURIComponent(asset)}`} variant="thumb256" alt="生成图片" />
             ) : (
               <ParameterView value={compactValue(output)} />
             )}

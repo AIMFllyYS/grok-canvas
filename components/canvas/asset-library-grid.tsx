@@ -18,7 +18,7 @@ function AssetCard({ asset, selected, reason, draggable, onSelect, onDragStart, 
   const canDrag = draggable && !reason && !failed;
   return <div className="min-w-0" draggable={canDrag} onDragStart={canDrag ? onDragStart : undefined} onDragEnd={canDrag ? onDragEnd : undefined}>
     <div className={`relative aspect-square overflow-hidden rounded-lg bg-muted/50 ring-1 ${selected ? "ring-foreground" : "ring-border"}`}>
-      <AssetImage src={`/api/assets/${encodeURIComponent(asset.assetName)}`} alt={asset.name} loading="lazy" decoding="async" className="size-full object-cover" onLoad={() => { setFailed(false); setReady(true); }} onError={() => { setFailed(true); setReady(false); }} />
+      <AssetImage src={`/api/assets/${encodeURIComponent(asset.assetName)}`} variant="thumb256" priority={2} alt={asset.name} decoding="async" className="size-full object-cover" onLoad={() => { setFailed(false); setReady(true); }} onError={() => { setFailed(true); setReady(false); }} />
       <ControlButton aria-label={asset.name} aria-pressed={selected} disabled={Boolean(blocked)} title={blocked ?? asset.name} onClick={onSelect} className="absolute inset-0 rounded-lg bg-transparent! hover:ring-2 hover:ring-inset hover:ring-foreground/50 disabled:pointer-events-none" />
       {selected && <span className="pointer-events-none absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-foreground text-background"><Check size={12} /></span>}
     </div>

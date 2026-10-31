@@ -298,7 +298,7 @@ function Workspace() {
         )}
       </main>
       {agentIds.map(id => <div key={id} hidden={id !== doc?.id}>
-        <CanvasAgent canvasId={id} beforeSend={async () => currentCanvasRef.current === id && ((await flushRef.current?.()) ?? true)} onBusy={busy => setBusyAgents(current => current[id] === busy ? current : { ...current, [id]: busy })} onSettled={async () => { if (currentCanvasRef.current === id) await flushRef.current?.(); }}/>
+        <CanvasAgent canvasId={id} active={id === doc?.id} beforeSend={async () => currentCanvasRef.current === id && ((await flushRef.current?.()) ?? true)} onBusy={busy => setBusyAgents(current => current[id] === busy ? current : { ...current, [id]: busy })} onSettled={async () => { if (currentCanvasRef.current === id) await flushRef.current?.(); }}/>
       </div>)}
     </div>
   );

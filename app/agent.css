@@ -697,6 +697,17 @@ html[data-toolbar-layout="scattered"] .agent-launcher {
   color: var(--muted-foreground);
   font-size: 11px;
 }
+/* P4-06：历史窗口「加载更早」。 */
+.agent-load-more {
+  align-self: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 12px;
+  background: var(--card);
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.agent-load-more:hover { color: var(--foreground); }
 .agent-loading {
   display: grid;
   place-content: center;

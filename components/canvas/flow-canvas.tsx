@@ -37,6 +37,7 @@ import { createGestureStore, type GestureResult } from "@/lib/canvas-runtime/ges
 import { applyFlowGeometry, buildMoveItems, createConfirmedGeometry, displayGeometry, keepLocalGeometry, routeNodeChanges, type ConfirmedGeometry, type ConfirmedSnapshot } from "@/lib/canvas-runtime/scene-adapter";
 import { createGeometryChannel, type GeometryChannel, type GeometryConflict, type ReconcileCandidate } from "@/lib/canvas-runtime/geometry-channel";
 import { createAckReporter, createCanvasSync, type SyncStatus } from "@/lib/canvas-runtime/sync-client";
+import { LIGHT_NODE_TYPES } from "./light-node";
 import { openOutbox, type PostResult } from "@/lib/canvas-runtime/outbox";
 import type { HistoryEntry } from "@/lib/canvas-runtime/history";
 import type { CanvasCommand, Geometry } from "@/lib/canvas-runtime/types";
@@ -124,7 +125,7 @@ import {
 import { defaultVideoNodeData, VideoNode, type VideoFlowNode, type VideoNodeData } from "./video-node";
 import { TextNode, type TextFlowNode } from "./text-node";
 
-const nodeTypes = { image: ImageNode, asset: AssetNode, video: VideoNode, canvasText: TextNode };
+const nodeTypes = { image: ImageNode, asset: AssetNode, video: VideoNode, canvasText: TextNode, ...LIGHT_NODE_TYPES };
 const edgeTypes = { scissor: ScissorEdge };
 
 function videoEdgeRole(edge: Edge): VideoInputRole {
@@ -386,6 +387,8 @@ export function FlowCanvas({
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
   const expandedNodeIdRef = useRef<string | null>(null);
   expandedNodeIdRef.current = expandedNodeId;
+  // P4-05：面板/候选面板打开的节点始终保持完整组件（不被裁剪或降级）。
+  const panelPins = useMemo(() => [panelNodeId, expandedNodeId].filter((id): id is string => !!id), [panelNodeId, expandedNodeId]);
   const openCandidates = useCallback((nodeId: string) => {
     setMenu(null);
     setPanelNodeId(null);
@@ -466,6 +469,9 @@ export function FlowCanvas({
   const revisionRef = useRef(doc.revision);
   // P3-09 远端同步：保存/手势期间到达的变更通知先挂起；状态只用于诊断。
   const pullPendingRef = useRef(false);
+  const remoteRetryRef = useRef(0);
+  const settleUntilRef = useRef(0);
+  const clearSettledCheckpointsRef = useRef<() => void>(() => {});
   const requestPullRef = useRef<() => void>(() => {});
   const syncStatusRef = useRef<SyncStatus>("closed");
   const ackRef = useRef<ReturnType<typeof createAckReporter> | null>(null);
@@ -599,10 +605,16 @@ export function FlowCanvas({
         };
         const remoteNodes = keepLocalGeometry(payload.nodes as Node[], current.nodes, id => channel.isPending(id));
         const mergedNodes: Node[] = [];
+        let skippedRemote = false;
         for (const node of remoteNodes) {
           if (!localById.has(node.id) && confirmed.nodePending(node.id)) continue; // 本地删除待确认
           const local = localById.get(node.id);
-          if (local && keepLocal(node.id)) { mergedNodes.push(local); continue; }
+          if (local && keepLocal(node.id)) {
+            // 本地有未确认命令时整节点保留本地；远端的其他字段改动等确认后再拉一次（P3-09：没有常态轮询兜底）。
+            if (JSON.stringify(local.data) !== JSON.stringify(node.data)) skippedRemote = true;
+            mergedNodes.push(local);
+            continue;
+          }
           const claimId = typeof node.data.sourceNodeId === "string" ? node.data.sourceNodeId : node.id;
           const claim = payload.generationClaims?.[claimId];
           const data = claim?.state === "unknown" && node.data.generationId === claim.id
@@ -622,6 +634,11 @@ export function FlowCanvas({
         }
         for (const local of current.edges) if (!remoteEdgeIds.has(local.id) && keepLocalEdge(local.id)) mergedEdges.push(local);
         acknowledgedRef.current = payload;
+        // 有远端改动因本地未确认命令被暂缓：短暂等待命令确认后再拉，最多连续 10 次。
+        if (skippedRemote && remoteRetryRef.current < 10) {
+          remoteRetryRef.current++;
+          setTimeout(() => requestPullRef.current(), 1200);
+        } else if (!skippedRemote) remoteRetryRef.current = 0;
         if (payload.name !== docRef.current.name) onRestoreNameRef.current?.(payload.name);
         setGenerationClaims(payload.generationClaims ?? {});
         revisionRef.current = payload.revision;
@@ -668,6 +685,16 @@ export function FlowCanvas({
       }
     }
   }, [doc.id, changes, geometry, canvasFieldWrites, markCommitted, clearDraftTimer, setNodesFromSync, setEdgesFromSync]);
+
+  // P3-09：没有常态轮询后，save() 不会在每次拖动后自动跑；命令确认且没有其他未保存修改时，在这里清掉已落库的坐标检查点，
+  // 否则刷新时会把这些旧检查点当成未保存的移动来恢复。
+  useEffect(() => {
+    clearSettledCheckpointsRef.current = () => {
+      if (gesture.active() || changes.dirty() || savingRef.current || dirtyVersion.current !== savedVersion.current || canvasFieldWrites.pending.length) return;
+      if ((channelRef.current?.pendingGeometry().size ?? 0) > 0) return;
+      void clearCanvasDraft(draftKeyRef.current, geometry.through()).catch(() => {});
+    };
+  }, [gesture, changes, canvasFieldWrites, geometry]);
 
   // 命令进持久 outbox 即可恢复，不再每 200ms 把完整工作文档写入草稿。
   const scheduleSave = useCallback(() => {
@@ -765,7 +792,7 @@ export function FlowCanvas({
             confirmed,
             post: postCanvasCommand,
             fetchSnapshot: () => fetchEntitySnapshot(doc.id),
-            onAcked: actorSeq => acks.report(actorSeq),
+            onAcked: actorSeq => { acks.report(actorSeq); clearSettledCheckpointsRef.current(); },
             onHistory: (commandId, entry) => { historyRef.current.set(commandId, entry); },
             onConflict: conflict => geometryHandlersRef.current.conflict(conflict),
             onRemote: geometries => geometryHandlersRef.current.remote(geometries),
@@ -809,12 +836,17 @@ export function FlowCanvas({
   // 手势/保存进行中或保存失败时先记下，空闲后再拉；不会重建整图或打断拖动。
   const requestPull = useCallback(() => {
     if (!draftReadyRef.current) return;
-    if (savingRef.current || !saveOkRef.current || latestRef.current.nodes.some(node => node.dragging || node.resizing)) { pullPendingRef.current = true; return; }
+    if (savingRef.current || !saveOkRef.current || changes.active() || latestRef.current.nodes.some(node => node.dragging || node.resizing)) { pullPendingRef.current = true; return; }
+    // 手势刚结束时，移动命令还在写入 outbox；此时拉到的是旧位置，会把节点拉回去。等它入队后再拉。
+    const wait = settleUntilRef.current - Date.now();
+    if (wait > 0) { if (!pullPendingRef.current) { pullPendingRef.current = true; setTimeout(() => { pullPendingRef.current = false; requestPullRef.current(); }, wait); } return; }
     void save();
-  }, [save]);
+  }, [save, changes]);
   useEffect(() => { requestPullRef.current = requestPull; }, [requestPull]);
   useEffect(() => {
-    if (!dragging && pullPendingRef.current) { pullPendingRef.current = false; requestPullRef.current(); }
+    if (dragging) return;
+    settleUntilRef.current = Date.now() + 800;
+    if (pullPendingRef.current) { pullPendingRef.current = false; requestPullRef.current(); }
   }, [dragging]);
   useEffect(() => {
     if (!draftReady) return;
@@ -2180,6 +2212,7 @@ export function FlowCanvas({
         <CanvasScene
           nodes={nodes}
           gesture={gesture}
+          pinnedIds={panelPins}
           edges={edges}
           nodeTypes={nodeTypes}
           onNodesChange={onNodesChange}
