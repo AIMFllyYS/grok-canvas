@@ -4,6 +4,7 @@
  * 按画布隔离：切换画布后迟到的调用事件不会出现在另一画布。
  */
 import { RUNTIME_BUDGET } from "./runtime-budget";
+import { addEntries, createPartialGate, editEntries } from "../agent/preview-input";
 
 export type PreviewEntry = {
   canvasId: string;
@@ -19,10 +20,18 @@ export type PreviewEntry = {
   status: "pending" | "failed";
   /** 工具已返回正式节点 ID：该节点出现在画布后移除预显示。 */
   nodeId?: string;
+  /** P5-02：模型显式给了坐标；否则由预显示协调器按流程排版估算位置。 */
+  explicit?: boolean;
+  ref?: string;
+  from?: string[];
+  /** 正文前 512 字符。 */
+  excerpt?: string;
+  /** edit/remove：被修改或待删除的已有节点。 */
+  targetId?: string;
 };
 
 const keyOf = (toolCallId: string, itemIndex: number) => `${toolCallId}:${itemIndex}`;
-const bytesOf = (entry: PreviewEntry) => 96 + entry.label.length * 2 + entry.toolCallId.length * 2;
+const bytesOf = (entry: PreviewEntry) => 96 + entry.label.length * 2 + entry.toolCallId.length * 2 + (entry.excerpt?.length ?? 0) * 2;
 
 export function createPreviewStore(limits: { items?: number; bytes?: number } = {}) {
   const maxItems = limits.items ?? RUNTIME_BUDGET.previewQueueItems;
@@ -91,14 +100,18 @@ type SchedulerLike = { schedule(task: { key: string; priority: number; run: () =
 const PREVIEW_PRIORITY = 3, TERMINAL_PRIORITY = 1;
 
 /**
- * Agent 工具调用 → 预显示条目（只读）：input-available 时按完整输入画虚线占位（经调度器合并，预览优先级）；
- * output-available 时把返回的节点 ID 交给条目，正式节点出现后由 CanvasPreview 移除；
- * output-error/denied 立即移除（终态优先级，flushTerminals 同步执行），不留残影。
+ * Agent 工具调用 → 预显示条目（只读，P2-09 + P5-02）：
+ * - input-streaming：按 SDK 已解析的 partial 输入画占位（每调用 100ms 合并），input-available 用完整输入覆盖；
+ * - edit_canvas_nodes：被修改的节点叠「正在修改」，待删除的叠「待删除」，正式文档不变；
+ * - output-available：新增条目拿到正式节点 ID，正式节点出现后由 CanvasPreview 移除；修改/删除标记直接移除；
+ * - output-error/denied 立即移除（终态优先级，flushTerminals 同步执行），不留残影。
  */
-export function bridgeToolPart(store: PreviewStore, canvasId: string, part: ToolPartLike, scheduler?: SchedulerLike): void {
+const partialGate = createPartialGate();
+export function bridgeToolPart(store: PreviewStore, canvasId: string, part: ToolPartLike, scheduler?: SchedulerLike, now: number = Date.now()): void {
   const toolCallId = part.toolCallId;
   if (!toolCallId) return;
   const terminal = (run: () => void) => {
+    partialGate.forget(`${canvasId}:${toolCallId}`);
     if (!scheduler) { run(); return; }
     scheduler.cancelPrefix(`${canvasId}:${toolCallId}:`);
     scheduler.schedule({ key: `${canvasId}:${toolCallId}:terminal`, priority: TERMINAL_PRIORITY, run });
@@ -106,35 +119,28 @@ export function bridgeToolPart(store: PreviewStore, canvasId: string, part: Tool
   };
   if (part.state === "output-error" || part.state === "output-denied") { terminal(() => store.remove(canvasId, toolCallId)); return; }
   if (part.state === "output-available") {
+    if ((part as { preliminary?: boolean }).preliminary) return; // 执行阶段，不是最终结果
     const nodes = (part.output as { nodes?: Array<{ id?: unknown }> } | undefined)?.nodes;
     terminal(() => {
       const current = store.get(canvasId).filter(entry => entry.toolCallId === toolCallId);
       if (!current.length) return;
-      if (!Array.isArray(nodes)) { store.remove(canvasId, toolCallId); return; }
       for (const entry of current) {
-        const nodeId = nodes[entry.itemIndex]?.id;
+        const nodeId = entry.kind === "add" && Array.isArray(nodes) ? nodes[entry.itemIndex]?.id : undefined;
         if (typeof nodeId === "string") store.upsert({ ...entry, nodeId });
         else store.remove(canvasId, toolCallId, entry.itemIndex);
       }
     });
     return;
   }
-  if (part.state !== "input-available") return;
-  const input = (part.input ?? {}) as Record<string, unknown>;
-  if (part.type === "tool-add_canvas_nodes" && Array.isArray(input.nodes)) {
-    (input.nodes as Array<Record<string, unknown>>).slice(0, 20).forEach((node, index) => {
-      const type = node.type === "canvasText" || node.type === "video" ? node.type : "image";
-      const entry: PreviewEntry = {
-        canvasId, toolCallId, itemIndex: index, kind: "add", nodeType: type,
-        label: typeof node.name === "string" ? node.name : type === "canvasText" ? "文稿" : type === "video" ? "视频" : "图片",
-        x: typeof node.x === "number" ? node.x : 0, y: typeof node.y === "number" ? node.y : 0,
-        width: typeof node.width === "number" ? Math.min(node.width, 560) : type === "canvasText" ? 360 : 304,
-        height: typeof node.height === "number" ? Math.min(node.height, 1120) : type === "canvasText" ? 260 : 264,
-        status: "pending",
-      };
-      if (store.get(canvasId).some(existing => existing.toolCallId === toolCallId && existing.itemIndex === index && existing.nodeId)) return;
-      if (scheduler) scheduler.schedule({ key: `${canvasId}:${toolCallId}:${index}`, priority: PREVIEW_PRIORITY, run: () => store.upsert(entry), bytes: bytesOf(entry) });
-      else store.upsert(entry);
-    });
+  if (part.state !== "input-available" && part.state !== "input-streaming") return;
+  const entries = part.type === "tool-add_canvas_nodes" ? addEntries(canvasId, toolCallId, part.input)
+    : part.type === "tool-edit_canvas_nodes" && part.state === "input-available" ? editEntries(canvasId, toolCallId, part.input)
+    : [];
+  if (!entries.length) return;
+  if (part.state === "input-streaming" && !partialGate.allow(`${canvasId}:${toolCallId}`, entries.length, now)) return;
+  for (const entry of entries) {
+    if (store.get(canvasId).some(existing => existing.toolCallId === toolCallId && existing.itemIndex === entry.itemIndex && existing.nodeId)) continue;
+    if (scheduler) scheduler.schedule({ key: `${canvasId}:${toolCallId}:${entry.itemIndex}`, priority: PREVIEW_PRIORITY, run: () => store.upsert(entry), bytes: bytesOf(entry) });
+    else store.upsert(entry);
   }
 }

@@ -45,6 +45,7 @@ export async function POST(request: Request) {
         origin,
         settings,
         request.signal,
+        conversationId,
       );
     const unlock = release;
     return await createAgentUIStreamResponse({
