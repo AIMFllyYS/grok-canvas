@@ -71,6 +71,14 @@ export const IMPORT_CATALOG: readonly ImportEntry[] = Object.freeze([
     tables: [], idTransform: "不导入（按需重新生成）", checksum: "不读取内容", onMissing: "正常", onCorrupt: "不适用", excluded: true,
   },
   {
+    kind: "cache", pattern: /^[^/]+\.json\.[0-9a-f-]{36}\.tmp$/, description: "原子写入中断留下的临时文件（应用从不读取）",
+    tables: [], idTransform: "不导入，原文件保留", checksum: "不读取内容", onMissing: "正常", onCorrupt: "不适用", excluded: true,
+  },
+  {
+    kind: "cache", pattern: /^(studio-image-jobs|studio-exports)\/.+$/, description: "已退役的 studio 生成任务与导出记录（当前应用不再读取）",
+    tables: [], idTransform: "不导入，原文件保留", checksum: "不读取内容", onMissing: "正常", onCorrupt: "不适用", excluded: true,
+  },
+  {
     kind: "auth", pattern: /^(auth(\.[^/]+)?\.json|oauth[^/]*|\.grok\/.*)$/, description: "OAuth / 登录凭据",
     tables: [], idTransform: "不导入", checksum: "不读取内容", onMissing: "不适用", onCorrupt: "不适用", excluded: true,
   },
