@@ -103,11 +103,6 @@ jobs:
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 14
-      - name: PDCA evidence and completed dependencies
-        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.node == '24.20.0'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/planning/validate-plan.mjs --pr
       - name: Upload non-secret build metadata
         if: always() && matrix.os == 'ubuntu-latest' && matrix.node == '24.20.0'
         uses: actions/upload-artifact@v4

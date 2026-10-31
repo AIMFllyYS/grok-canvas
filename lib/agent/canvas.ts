@@ -1,6 +1,6 @@
 import { loadCanvas, publicCanvas, updateCanvas, type CanvasDoc } from "../canvas-store";
 import { createReferenceIndex, resolveCanvasReferences } from "../canvas-references";
-import { createPlacementIndex, placeNewNode } from "../node-placement";
+import { createPlacementIndex, flowNodeSize, layoutFlowNodes, placeNewNode } from "../node-placement";
 import { AgentError } from "./store";
 import { diffCanvasOperations } from "../canvas-operations";
 import { editLeaseActive } from "../canvas-edit-leases";
@@ -41,31 +41,44 @@ export async function mutateCanvas(id: string, edit: (doc: CanvasDoc) => void) {
   if (!saved) throw new AgentError("画布不存在", 404);
   return publicCanvas(saved);
 }
-export function addNodes(
-  c: CanvasDoc,
-  items: {
-    type: "image" | "video" | "canvasText";
-    name?: string;
-    prompt: string;
-    content?: string;
-    width?: number;
-    height?: number;
-    x?: number;
-    y?: number;
-  }[],
-) {
-  const nodes = c.nodes as CanvasNode[];
-  const placement = createPlacementIndex(nodes);
-  const added = items.map((item) => {
+export type AgentNodeInput = {
+  type: "image" | "video" | "canvasText";
+  name?: string;
+  prompt: string;
+  content?: string;
+  width?: number;
+  height?: number;
+  x?: number;
+  y?: number;
+  /** 本批内的临时代号，供后续条目的 from 引用。 */
+  ref?: string;
+  /** 上游：已有节点 ID 或本批的 ref；据此连线并按流程放在上游右侧。 */
+  from?: string[];
+};
+export type AgentLink = { source: string; target: string };
+
+/** 媒体参考只允许 图片/素材 → 图片/视频；涉及文本的连线只表示关系。 */
+export function validAgentLink(source: { type: string }, target: { type: string }) {
+  if (source.type === "canvasText" || target.type === "canvasText") return true;
+  return ["image", "asset"].includes(source.type) && ["image", "video"].includes(target.type);
+}
+
+/**
+ * 计算新增节点（不写库）：有上游或未给坐标的节点按左→右流程排布（layoutFlowNodes），
+ * 只有显式给了坐标且没有上游的节点才按坐标就近避让。返回节点与要新建的连线。
+ */
+export function planAgentNodes(c: CanvasDoc, items: AgentNodeInput[]): { nodes: CanvasNode[]; links: AgentLink[] } {
+  const existing = c.nodes as CanvasNode[];
+  const byRef = new Map<string, string>();
+  const drafts = items.map((item) => {
     const size = item.type === "canvasText"
       ? { width: Math.min(item.width ?? 360, AGENT_TEXT_MAX_WIDTH), height: Math.min(item.height ?? 260, AGENT_TEXT_MAX_HEIGHT) }
-      : { width: 304, height: 264 };
-    const position = placeNewNode({ x: item.x ?? 0, y: item.y ?? 0 }, nodes, size, placement);
-    const n = {
+      : undefined;
+    const n: CanvasNode = {
       id: crypto.randomUUID(),
       type: item.type,
-      position,
-      ...(item.type === "canvasText" ? size : {}),
+      position: { x: item.x ?? 0, y: item.y ?? 0 },
+      ...(size ?? {}),
       data: item.type === "canvasText" ? { name: item.name ?? "文稿", content: item.content ?? "" } : {
         name: item.name ?? (item.type === "image" ? "图片" : "视频"),
         prompt: item.prompt,
@@ -81,11 +94,59 @@ export function addNodes(
         uploadInputs: [],
       },
     };
-    nodes.push(n);
-    placement.add(n);
+    if (item.ref) {
+      if (byRef.has(item.ref)) throw new AgentError(`ref 重复：${item.ref}`);
+      byRef.set(item.ref, n.id);
+    }
     return n;
   });
-  return added;
+  const all = new Map<string, CanvasNode>([...existing.map((n) => [n.id, n] as const), ...drafts.map((n) => [n.id, n] as const)]);
+  const links: AgentLink[] = [];
+  items.forEach((item, index) => {
+    for (const from of item.from ?? []) {
+      const source = all.get(byRef.get(from) ?? from);
+      const target = drafts[index]!;
+      if (!source || source.id === target.id) throw new AgentError(`上游节点不存在：${from}`);
+      if (!validAgentLink(source, target)) throw new AgentError("连线端点无效；图片可作为图片或视频参考，文本可连接任何节点");
+      if (!links.some((l) => l.source === source.id && l.target === target.id)) links.push({ source: source.id, target: target.id });
+    }
+  });
+  const linked = new Set(links.map((l) => l.target));
+  const explicit = drafts.filter((n, i) => items[i]!.x !== undefined && items[i]!.y !== undefined && !linked.has(n.id));
+  const flow = drafts.filter((n) => !explicit.includes(n));
+  const placement = createPlacementIndex(existing);
+  const settled = [...existing];
+  for (const n of explicit) {
+    n.position = placeNewNode(n.position, settled, flowNodeSize(n), placement);
+    settled.push(n);
+    placement.add(n);
+  }
+  if (flow.length) {
+    const positions = layoutFlowNodes({ nodes: [...settled, ...flow], edges: [...(c.edges as CanvasEdge[]), ...links] }, flow, { mode: "append" });
+    for (const n of flow) n.position = positions.get(n.id) ?? n.position;
+  }
+  return { nodes: drafts, links };
+}
+
+/** 本地副本上新增节点与连线（测试与旧路径使用；正式写入走 planAgentNodes + 命令）。 */
+export function addNodes(c: CanvasDoc, items: AgentNodeInput[]) {
+  const { nodes, links } = planAgentNodes(c, items);
+  (c.nodes as CanvasNode[]).push(...nodes);
+  if (links.length) editNodes(c, { updates: [], remove: [], connect: links, disconnect: [] });
+  return nodes;
+}
+
+/** 重排指定节点为左→右流程；其余节点不动并被避让。正在生成的节点保持原位。 */
+export function planArrangement(c: CanvasDoc, nodeIds: string[]) {
+  const nodes = c.nodes as CanvasNode[];
+  const ids = new Set(nodeIds);
+  for (const id of ids) if (!nodes.some((n) => n.id === id)) throw new AgentError(`节点不存在：${id}`);
+  const moving = nodes.filter((n) => ids.has(n.id) && n.data.status !== "running");
+  const positions = layoutFlowNodes({ nodes, edges: c.edges as CanvasEdge[] }, moving, { mode: "arrange" });
+  return moving.flatMap((n) => {
+    const to = positions.get(n.id);
+    return to && (to.x !== n.position.x || to.y !== n.position.y) ? [{ id: n.id, x: to.x, y: to.y }] : [];
+  });
 }
 export function editNodes(
   c: CanvasDoc,
@@ -151,8 +212,7 @@ export function editNodes(
       !source ||
       !target ||
       source.id === target.id ||
-      (!(source.type === "canvasText" || target.type === "canvasText") &&
-        (!["image", "asset"].includes(source.type) || !["image", "video"].includes(target.type)))
+      !validAgentLink(source, target)
     )
       throw new AgentError("连线端点无效；图片可作为图片或视频参考");
     const textLink = source.type === "canvasText" || target.type === "canvasText";

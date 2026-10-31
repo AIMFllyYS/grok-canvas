@@ -170,28 +170,50 @@ html[data-toolbar-layout="scattered"] .agent-launcher {
 .agent-message-assistant {
   width: 100%;
 }
+/* Markdown 排版（对话与文本节点共用）。Streamdown 自带的 Tailwind 间距类不会被生成，
+   这里显式定义块级节奏：段落之间留出约半行，标题前更多、标题后更少；单个换行按换行显示
+   （模型常用单换行分段，CommonMark 会把它们并成一段）。 */
 .agent-markdown {
   font-size: 12px;
   line-height: 1.75;
   overflow-wrap: anywhere;
   min-width: 0;
 }
-.agent-markdown > * + * {
-  margin-top: 8px;
-}
-.agent-markdown p {
+.agent-markdown > * {
   margin: 0;
 }
-.agent-markdown h1,
-.agent-markdown h2,
-.agent-markdown h3 {
+.agent-markdown > * + * {
+  margin-top: 0.75em;
+}
+.agent-markdown :is(p, li, td, th) {
+  white-space: pre-line;
+}
+.agent-markdown :is(ul, ol, table, tr, thead, tbody) {
+  white-space: normal;
+}
+/* 松散列表/嵌套列表的 li 里，块级子元素之间有换行文本节点，保留它们会多出空行。 */
+.agent-markdown li:has(> :is(p, ul, ol, pre, blockquote, table, div)) {
+  white-space: normal;
+}
+.agent-markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 0;
   font-size: 13px;
   line-height: 1.5;
   font-weight: 600;
 }
+.agent-markdown h1 {
+  font-size: 14px;
+}
+.agent-markdown > * + :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 1.4em;
+}
+.agent-markdown > :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: 0.4em;
+}
 .agent-markdown ul,
 .agent-markdown ol {
-  padding-left: 18px;
+  padding-left: 1.4em;
+  list-style-position: outside;
 }
 .agent-markdown ul {
   list-style: disc;
@@ -199,8 +221,43 @@ html[data-toolbar-layout="scattered"] .agent-launcher {
 .agent-markdown ol {
   list-style: decimal;
 }
+.agent-markdown li {
+  padding: 0;
+}
 .agent-markdown li + li {
-  margin-top: 3px;
+  margin-top: 0.3em;
+}
+.agent-markdown li > :is(ul, ol) {
+  margin-top: 0.3em;
+}
+.agent-markdown li > p {
+  display: block;
+  margin: 0;
+}
+.agent-markdown li > p + p {
+  margin-top: 0.4em;
+}
+.agent-markdown li::marker {
+  color: var(--muted-foreground);
+}
+.agent-markdown strong {
+  font-weight: 600;
+}
+.agent-markdown blockquote {
+  padding-left: 0.9em;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+}
+.agent-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin-block: 1.2em;
+}
+.agent-markdown :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--muted);
+  font-size: 0.92em;
 }
 .agent-markdown pre {
   overflow: auto;
@@ -209,6 +266,12 @@ html[data-toolbar-layout="scattered"] .agent-launcher {
 }
 .agent-markdown table {
   font-size: 11px;
+  border-collapse: collapse;
+}
+.agent-markdown :is(td, th) {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
 }
 .agent-markdown a {
   text-decoration: underline;
@@ -216,6 +279,16 @@ html[data-toolbar-layout="scattered"] .agent-launcher {
 .agent-markdown [data-streamdown="code-block"] {
   font-size: 11px;
   max-width: 100%;
+}
+/* 一条回复里的文字、推理与工具调用之间同样留出呼吸感；相邻工具调用紧凑成组。 */
+.agent-message-content > * + * {
+  margin-top: 12px;
+}
+.agent-message-content > .agent-tool + .agent-tool {
+  margin-top: 4px;
+}
+.agent-message-user .agent-markdown :is(p, li) {
+  white-space: pre-wrap;
 }
 .agent-empty {
   padding: 32px 15px;
@@ -649,37 +722,72 @@ html[data-toolbar-layout="scattered"] .agent-launcher {
   padding-top: 7px;
 }
 .agent-tool {
-  margin: 7px 0;
-  border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 8px;
   overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+.agent-tool[data-tool-state="output-error"],
+.agent-tool[data-tool-state="output-denied"] {
+  background: color-mix(in srgb, var(--destructive) 8%, transparent);
 }
 .agent-tool-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   width: 100%;
-  padding: 9px;
+  min-height: 30px;
+  padding: 6px 9px;
   font-size: 11px;
   text-align: left;
   cursor: pointer;
 }
-.agent-tool-header > span:first-of-type {
+.agent-tool-header:hover {
+  background: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.agent-tool-icon {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+.agent-tool-label {
+  flex-shrink: 0;
+  font-weight: 500;
+  color: var(--foreground);
+}
+.agent-tool-summary {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted-foreground);
+}
+.agent-tool-chevron {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  opacity: 0.6;
+}
+.agent-tool-error {
+  padding: 0 9px 8px 29px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--destructive);
 }
 .agent-tool-status,
 .agent-badge-error {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 10px;
+  flex-shrink: 0;
+  margin-left: auto;
   color: var(--muted-foreground);
 }
 .agent-badge-error {
   color: var(--destructive);
 }
 .agent-tool-content {
-  padding: 3px 10px 10px;
+  padding: 2px 10px 10px 29px;
+}
+.agent-tool-error-detail {
+  color: var(--destructive);
 }
 .agent-eyebrow {
   font-size: 9px;

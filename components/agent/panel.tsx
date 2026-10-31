@@ -15,7 +15,7 @@ import {
   MessageResponse,
 } from "@/components/ai-elements/message";
 import { Reasoning } from "@/components/ai-elements/reasoning";
-import { Tool } from "@/components/ai-elements/tool";
+import { Tool, ToolNodeNames, collectNodeNames } from "@/components/ai-elements/tool";
 import { AgentGlyph } from "./icons";
 import { AgentComposer } from "./composer";
 import { ModelPicker } from "./model-picker";
@@ -242,6 +242,8 @@ function Chat({
   });
   const busy = status === "streaming" || status === "submitted",
     disabled = switching || uploading;
+  // 工具行显示节点名：从本对话的工具结果里收集 ID → 名称。
+  const nodeNames = useMemo(() => collectNodeNames(messages), [messages]);
   // 只读预显示：只桥接正在进行的最后一条回复里已确认的工具输入/结果；结束后清掉没有交接正式节点的条目。
   const canvasId = state.canvasId;
   useEffect(() => {
@@ -340,7 +342,9 @@ function Chat({
                       streaming={busy && p.state === "streaming"}
                     />
                   ) : p.type.startsWith("tool-") ? (
-                    <Tool key={i} part={p as ToolUIPart} />
+                    <ToolNodeNames.Provider key={i} value={nodeNames}>
+                      <Tool part={p as ToolUIPart} />
+                    </ToolNodeNames.Provider>
                   ) : null,
                 )}
               </MessageContent>

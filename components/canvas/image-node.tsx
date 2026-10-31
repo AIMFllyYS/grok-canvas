@@ -102,7 +102,12 @@ export const ImageNode = memo(function ImageNode({ id, data, selected, draggable
   // 无图：1:1 占位框；有图：按实际宽高比，横向固定宽、竖向固定高
   let boxStyle: CSSProperties;
   if (!data.assetName) {
-    boxStyle = { width: 240, height: 240 };
+    // 选了固定比例时占位框与生成结果同尺寸（与视频节点一致），布局不会在生成后错位；auto 仍是 240 方形。
+    const [w, h] = String(data.aspectRatio ?? "").split(":").map(Number);
+    const chosen = w && h && w > 0 && h > 0 ? w / h : null;
+    boxStyle = chosen === null ? { width: 240, height: 240 }
+      : chosen < 1 ? { height: BOX_SIZE, width: Math.max(120, Math.round(BOX_SIZE * chosen)) }
+      : { width: BOX_SIZE, aspectRatio: String(chosen) };
   } else if (ratio !== null && ratio < 1) {
     boxStyle = { height: BOX_SIZE, width: Math.max(120, Math.round(BOX_SIZE * ratio)) };
   } else {
