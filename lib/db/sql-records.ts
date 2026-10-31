@@ -20,6 +20,11 @@ import { readStorageState } from "./storage-mode";
 /** 旧协议写入（PUT/operations/服务端字段编辑）在命令日志里的固定 actor。 */
 export const LEGACY_ACTOR = "00000000-0000-4000-8000-00000000c0de";
 
+/** SSE 修订探测（P3-09）。 */
+export async function canvasRevisionSql(id: string): Promise<{ revision: number } | null> {
+  return sqlQuery<{ revision: number } | null>("canvasDoc.revision", { canvasId: id });
+}
+
 type Snapshot = {
   canvasId: string; revision: number; name: string; nameVersion: number; storageEpoch: string; eventSeq: number;
   nodes: NodeSummary[]; documents: DocumentRecord[]; edges: EdgeRecord[];

@@ -138,7 +138,10 @@ test("完整导入：保留 ID/revision/版本/requestId/claims/legacy IDs/lastC
   let ids = [], after;
   for (;;) { const page = conversationsRepo.listMessages(db, { canvasId: "canvas-b", conversationId: "legacy-canvas-b", afterOrdinal: after }); ids.push(...page.items.map(m => m.id)); if (page.nextOrdinal === null) break; after = page.nextOrdinal; }
   assert.deepEqual(ids, Array.from({ length: 120 }, (_, i) => `b${i}`));
-  assert.ok(report.files["canvases/canvas-a.json"].tombstonesNotImported === 1, "墓碑未导入在报告中显式列出");
+  assert.equal(report.files["canvases/canvas-a.json"].nodeTombstones, 1, "节点墓碑以占位行导入并计数");
+  const tomb = db.prepare("select deleted_at, entity_version from nodes where canvas_id = 'canvas-a' and id = 'old9'").get();
+  assert.ok(tomb?.deleted_at, "墓碑占位行带 deleted_at，旧 ID 不能复活");
+  assert.equal(tomb.entity_version, 1);
   assert.ok(report.validation.tables.some(t => t.source === "canvases/canvas-a.json" && t.actual.nodes === 4 && t.expected.nodesHash === t.actual.nodesHash));
   assert.deepEqual(JSON.parse(await readFile(path.join(src.staging, importer.REPORT_FILE), "utf8")).status, "ready_to_switch");
 });
@@ -186,7 +189,8 @@ test("中间批次中断再跑：数量/hash 与一次完成相同，节点/消�
   assert.deepEqual(strip(resumed), strip(once), "续跑结果与一次导入的数量/hash 完全一致");
   const db = open(src.staging);
   assert.equal(db.prepare("select count(*) as n from agent_messages").get().n, 124);
-  assert.equal(db.prepare("select count(*) as n from nodes").get().n, 5);
+  assert.equal(db.prepare("select count(*) as n from nodes where deleted_at is null").get().n, 5);
+  assert.equal(db.prepare("select count(*) as n from nodes where deleted_at is not null").get().n, 1, "墓碑占位行续跑不重复");
   db.close();
   assert.equal((await importer.runImport({ sourceDir: src.dir, stagingDir: src.staging, convert })).status, "ready_to_switch", "已完成的运行再跑直接返回报告");
 

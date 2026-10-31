@@ -37,6 +37,8 @@ export type GeometryChannelOptions = {
   onStatus?: (status: ChannelStatus) => void;
   /** 非几何命令被服务端拒绝且无法安全改基时（P2-07）。 */
   onRejected?: (rejection: { kind: string; message: string; ids: string[] }) => void;
+  /** 本地 outbox 确认某序号后（P3-10 上报服务端水位）。 */
+  onAcked?: (actorSeq: number) => void;
   schedule?: (fn: () => void, ms: number) => () => void;
 };
 
@@ -62,6 +64,7 @@ export function createGeometryChannel(options: GeometryChannelOptions) {
   const sender = createCommandSender({
     outbox: outbox as Outbox,
     canvasId,
+    ...(options.onAcked ? { onAcked: options.onAcked } : {}),
     post: async (command) => {
       const before = confirmed.reader();
       const result = await options.post(command);
