@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 
 import { useStore, useViewport, type InternalNode, type Viewport } from "@xyflow/react";
 import { Copy, Download, Loader2, X } from "lucide-react";
 import { ControlButton } from "@/components/ui/control-button";
+import { AssetImage } from "@/components/ui/asset-image";
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { fitFloatingRect } from "@/lib/floating-placement";
 import { fanOutSlots, type FanPosition } from "@/lib/multi-image";
@@ -211,7 +212,7 @@ function FanSurface({ node, viewport, closing, reduced }: {
                   onClick={() => setPreview({ assetName: slot.assetName!, label })}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={assetUrl(slot.assetName!)} alt={label} draggable={false} className="h-full w-full object-contain" />
+                  <AssetImage src={assetUrl(slot.assetName!)} variant="thumb256" alt={label} className="h-full w-full object-contain" />
                 </button>
                 <div className="absolute inset-x-1.5 top-1.5 flex items-start justify-between gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                   <ControlButton
@@ -264,7 +265,7 @@ function FanSurface({ node, viewport, closing, reduced }: {
           >
             <DialogTitle className="sr-only">{preview.label} · 预览</DialogTitle>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={assetUrl(preview.assetName)} alt={preview.label} draggable={false} className="h-full w-full object-contain" />
+            <AssetImage src={assetUrl(preview.assetName)} alt={preview.label} className="h-full w-full object-contain" />
             <DialogClose
               className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 focus-visible:outline-2"
               aria-label="关闭预览"

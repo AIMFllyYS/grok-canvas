@@ -232,7 +232,7 @@ test("FlowCanvas：删除常态 2 秒整图轮询，改由 SSE 驱动拉取并�
   const source = await readFile(new URL("../components/canvas/flow-canvas.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /setInterval\(\(\) => \{\s*if \(draftReadyRef\.current && saveOkRef\.current/, "不再定时调用 save 拉整图");
   assert.match(source, /createCanvasSync\(/);
-  assert.match(source, /onAcked: actorSeq => acks\.report\(actorSeq\)/);
+  assert.match(source, /onAcked: actorSeq => \{ acks\.report\(actorSeq\); clearSettledCheckpointsRef\.current\(\); \}/, "确认后上报水位并清理已落库的坐标检查点");
   const route = await readFile(new URL("../app/api/canvases/[id]/events/route.ts", import.meta.url), "utf8");
   assert.match(route, /text\/event-stream/);
   assert.match(route, /createCanvasEventStream/);

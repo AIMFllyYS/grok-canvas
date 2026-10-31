@@ -10,7 +10,7 @@ export const METRICS_SCHEMA_VERSION = 1;
 export const METRIC_NAMES = [
   "pointer_to_paint_ms", "pointer_to_paint_unmeasured", "frame_interval_ms", "react_commit_ms",
   "full_scan_count", "clone_count", "outbox_items", "outbox_bytes",
-  "db_queue_ms", "db_txn_ms", "media_active", "subscriptions", "event_to_visible_ms", "local_commit_ms",
+  "db_queue_ms", "db_txn_ms", "media_active", "subscriptions", "event_to_visible_ms", "local_commit_ms", "lod_full_mounted", "media_fetch_active", "media_decode_active", "player_active",
 ] as const;
 export type MetricName = (typeof METRIC_NAMES)[number];
 
