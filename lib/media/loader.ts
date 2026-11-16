@@ -142,7 +142,12 @@ export function createMediaLoader(options: LoaderOptions) {
         owner.subscribers.delete(sub);
         if (!sub.settled) { sub.settled = true; sub.reject(new MediaLoadError("已取消", "aborted")); }
         // 最后一个订阅者退出：取消底层下载；解码中的结果在完成后丢弃。
-        if (!owner.subscribers.size && (owner.stage === "fetching" || owner.stage === "waiting" || owner.stage === "queued")) owner.controller.abort();
+        // 被取消的任务立即摘出 jobs：节点卸载后马上重挂（LOD/同步重建）时要新建任务，
+        // 否则会挂到已取消的任务上——它不再重试也不再通知，图片永远停在加载占位。
+        if (!owner.subscribers.size && (owner.stage === "fetching" || owner.stage === "waiting" || owner.stage === "queued")) {
+          owner.controller.abort();
+          finish(owner);
+        }
       };
       opts.signal?.addEventListener("abort", leave, { once: true });
       pump();

@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Clapperboard,
   Eye,
+  FileText,
   ImagePlus,
   LayoutGrid,
   LoaderCircle,
@@ -20,7 +21,7 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { ParameterView } from "@/components/agent/parameter-view";
 import { AssetImage } from "@/components/ui/asset-image";
 import { compactValue, summarizeTool } from "./tool-summary";
@@ -35,6 +36,7 @@ const tools: Record<string, { label: string; icon: LucideIcon }> = {
   add_canvas_nodes: { label: "添加节点", icon: SquarePlus },
   edit_canvas_nodes: { label: "编辑节点与连线", icon: PencilLine },
   arrange_canvas_nodes: { label: "整理布局", icon: LayoutGrid },
+  write_document: { label: "撰写文稿", icon: FileText },
   generate_image: { label: "生成图片", icon: ImagePlus },
   generate_video: { label: "生成视频", icon: Clapperboard },
   check_video_task: { label: "查询视频任务", icon: RefreshCw },
@@ -49,6 +51,19 @@ export type ToolRecordView = { phase: string; summary?: string; error?: string }
 export const ToolRecords = createContext<ReadonlyMap<string, ToolRecordView>>(new Map());
 const PHASE_LABELS: Record<string, string> = { "input-streaming": "接收参数", validating: "校验参数", queued: "排队中", executing: "执行中" };
 const INTERRUPTED = "上次执行已中断";
+
+/** 撰写中只显示正文末尾一段纯文本：不做 Markdown 解析，长文也只排这一小段，写完后由节点完整渲染。 */
+const DRAFT_TAIL = 600;
+function DraftView({ content }: { content: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { const el = ref.current; if (el) el.scrollTop = el.scrollHeight; }, [content]);
+  const tail = content.length > DRAFT_TAIL ? `…${content.slice(-DRAFT_TAIL)}` : content;
+  return (
+    <div ref={ref} className="agent-tool-draft ui-scroll-hidden" aria-live="off" aria-label="正在撰写的正文">
+      {content ? <p className="agent-tool-draft-text">{tail}</p> : <span className="agent-tool-draft-empty">正在构思…</span>}
+    </div>
+  );
+}
 
 export function Tool({ part }: { part: ToolUIPart }) {
   const names = useContext(ToolNodeNames);
@@ -66,7 +81,9 @@ export function Tool({ part }: { part: ToolUIPart }) {
   const failed = !recovered && (part.state === "output-error" || part.state === "output-denied");
   const [open, setOpen] = useState(false);
   const output = part.state === "output-available" && !preliminary ? part.output : undefined;
-  const phase = preliminary ? PHASE_LABELS[String((part.output as { phase?: unknown } | undefined)?.phase)] : part.state === "input-streaming" ? PHASE_LABELS["input-streaming"] : undefined;
+  const progress = preliminary ? (part.output as { phase?: unknown; summary?: unknown; draft?: { content?: unknown } } | undefined) : undefined;
+  const draft = typeof progress?.draft?.content === "string" ? progress.draft.content : null;
+  const phase = preliminary ? (typeof progress?.summary === "string" ? progress.summary : PHASE_LABELS[String(progress?.phase)]) : part.state === "input-streaming" ? PHASE_LABELS["input-streaming"] : undefined;
   const summary = recovered ? `${record?.summary ?? "已完成"}（连接中断前已提交）` : phase ?? (part.state === "input-streaming" ? "" : summarizeTool(name, part.input, output, names));
   const asset = output && typeof output === "object" && "name" in output ? String(output.name) : undefined;
   const status = running ? "进行中" : failed ? (unknown ? "结果未知" : "未完成") : "已完成";
@@ -83,6 +100,8 @@ export function Tool({ part }: { part: ToolUIPart }) {
         <ChevronDown size={12} className={open ? "agent-tool-chevron rotate-180" : "agent-tool-chevron"} />
       </Collapsible.Trigger>
       {errorText && !recovered && !open && <div className="agent-tool-error" role="alert">{errorText}</div>}
+      {/* 撰写中的正文：不用展开就能看到，跟随末尾滚动；写完后收起，只留摘要。 */}
+      {draft !== null && running && <DraftView content={draft} />}
       <Collapsible.Panel className="agent-tool-content">
         <div className="agent-eyebrow">参数</div>
         <ParameterView value={compactValue(part.input ?? {})} />

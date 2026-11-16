@@ -6,7 +6,21 @@ import { loadTypescript } from "./helpers/load-typescript.mjs";
 const previews = await loadTypescript("lib/canvas-runtime/preview-store.ts");
 const coordinator = await loadTypescript("lib/canvas-runtime/preview-coordinator.ts");
 const input = await loadTypescript("lib/agent/preview-input.ts");
-after(async () => { await previews.dispose(); await coordinator.dispose(); await input.dispose(); });
+const messagesLib = await loadTypescript("lib/agent/messages.ts");
+after(async () => { await previews.dispose(); await coordinator.dispose(); await input.dispose(); await messagesLib.dispose(); });
+
+test("面板进行中提示：两个片段之间（模型在写整段工具参数）也显示；正在输出或工具在运行时不重复显示", () => {
+  const { pendingActivity } = messagesLib.module;
+  const reply = (...parts) => [{ id: "u", role: "user", parts: [{ type: "text", text: "写脚本" }] }, { id: "a", role: "assistant", parts }];
+  assert.equal(pendingActivity([], "submitted"), "正在连接 Grok…");
+  assert.equal(pendingActivity(reply(), "ready"), null);
+  assert.match(pendingActivity(reply({ type: "step-start" }), "streaming"), /思考/);
+  assert.equal(pendingActivity(reply({ type: "text", text: "好", state: "streaming" }), "streaming"), null);
+  assert.match(pendingActivity(reply({ type: "text", text: "好", state: "done" }), "streaming"), /撰写长文本/);
+  assert.match(pendingActivity(reply({ type: "tool-read_canvas", toolCallId: "t", state: "output-available", output: {} }, { type: "step-start" }), "streaming"), /撰写长文本/);
+  assert.equal(pendingActivity(reply({ type: "tool-add_canvas_nodes", toolCallId: "t", state: "input-available", input: {} }), "streaming"), null);
+  assert.equal(pendingActivity(reply({ type: "tool-generate_image", toolCallId: "t", state: "output-available", preliminary: true, output: {} }), "streaming"), null);
+});
 const { createPreviewStore, bridgeToolPart } = previews.module;
 const { placePreviews } = coordinator.module;
 const { addEntries, editEntries, createPartialGate } = input.module;
@@ -80,4 +94,26 @@ test("位置估算：没有坐标的新增按流程排在上游右侧，不再�
   assert.ok(byName["脚本"].x > 360, "在上游右侧");
   assert.ok(byName["镜头"].x > byName["脚本"].x, "下游在更右侧");
   assert.deepEqual([byName["定点"].x, byName["定点"].y], [999, 888]);
+});
+
+test("write_document 预显示：参数到齐画占位；草稿填进摘录（取末尾）且高度随正文增长；完成后交接正式节点；重写叠「正在撰写」", () => {
+  const store = createPreviewStore();
+  const w = (state, extra = {}) => ({ type: "tool-write_document", toolCallId: "w1", state, input: { title: "导演阐述", brief: "b", from: ["up"] }, ...extra });
+  bridgeToolPart(store, "c", w("input-available"));
+  let [entry] = store.get("c");
+  assert.deepEqual([entry.kind, entry.nodeType, entry.label, entry.excerpt, entry.from], ["add", "canvasText", "导演阐述", undefined, ["up"]]);
+  const short = entry.height;
+  const long = "开头" + "字".repeat(3000) + "最新一句";
+  bridgeToolPart(store, "c", w("output-available", { preliminary: true, output: { phase: "executing", draft: { content: long } } }));
+  [entry] = store.get("c");
+  assert.match(entry.label, /已写 3006 字/);
+  assert.ok(entry.excerpt.endsWith("最新一句") && entry.excerpt.length <= 513, "摘录是正文末尾");
+  assert.ok(entry.height > short, "占位随正文变高");
+  bridgeToolPart(store, "c", w("output-available", { output: { id: "doc-1", name: "导演阐述", chars: 3006 } }));
+  assert.equal(store.get("c")[0].nodeId, "doc-1", "完成后等正式节点出现再移除");
+  const edit = createPreviewStore();
+  bridgeToolPart(edit, "c", { type: "tool-write_document", toolCallId: "w2", state: "output-available", preliminary: true, input: { title: "剧本", brief: "b", nodeId: "t1" }, output: { phase: "executing", draft: { content: "已写的" } } });
+  assert.deepEqual(edit.get("c").map(e => [e.kind, e.targetId, e.label]), [["edit", "t1", "正在撰写 · 3 字"]]);
+  bridgeToolPart(edit, "c", { type: "tool-write_document", toolCallId: "w2", state: "output-error", input: {}, errorText: "x" });
+  assert.equal(edit.get("c").length, 0, "失败立即移除");
 });

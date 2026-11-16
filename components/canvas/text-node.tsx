@@ -27,7 +27,7 @@ export const TextNode = memo(function TextNode({ id, data, selected, draggable }
     <NodeSurface selected={selected} className="h-full w-full bg-card p-4">
       {/* 正文占比铺满卡片，所以不能再标 .nodrag：React Flow 会丢弃落在 .nodrag 元素内的按下点，
           整块标注就等于只剩 16px 内边距和标题条能拖。滚动改由 nowheel 保证。 */}
-      <div className="nowheel h-full overflow-auto text-sm text-foreground" aria-label="文本节点内容">
+      <div className="nowheel ui-scroll-hidden h-full overflow-auto text-sm text-foreground" aria-label="文本节点内容">
         <DocumentReader documentKey={id} content={data.content || ""} />
       </div>
     </NodeSurface>

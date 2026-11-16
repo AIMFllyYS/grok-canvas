@@ -63,8 +63,10 @@ export async function listToolRecords(canvasId: string, limit = 100): Promise<To
   return (await readJson(canvasId)).slice(-limit);
 }
 
-export type ToolProgress = { phase: ToolPhase; completed?: number; total?: number; summary?: string };
-type ExecuteOptions = { toolCallId: string; abortSignal?: AbortSignal };
+/** draft：执行中逐步产出的内容（例如正在撰写的正文），只给界面显示，不交给模型。 */
+export type ToolProgress = { phase: ToolPhase; completed?: number; total?: number; summary?: string; draft?: { title?: string; content: string } };
+/** progress：执行中推送一条 preliminary 进度（阶段固定为 executing）。 */
+type ExecuteOptions = { toolCallId: string; abortSignal?: AbortSignal; progress?: (update: Omit<ToolProgress, "phase">) => void };
 type Context = { canvasId: string; runId: string; tool: string; targets?: (input: never) => string[]; summarize?: (output: never) => string | undefined };
 
 /**
@@ -89,7 +91,19 @@ export function withExecution<I, O>(context: Context, run: (input: I, options: E
       yield { phase: "validating" } as ToolProgress;
       await step("executing");
       yield { phase: "executing" } as ToolProgress;
-      const output = await run(input, options);
+      // run 期间的进度经队列转成 yield：只保留最新一条（界面只要当前状态），run 结束后再交出结果。
+      let latest: ToolProgress | null = null;
+      let wake: (() => void) | null = null;
+      const progress = (update: Omit<ToolProgress, "phase">) => { latest = { phase: "executing", ...update }; wake?.(); };
+      let done = false;
+      const running = run(input, { ...options, progress }).finally(() => { done = true; wake?.(); });
+      running.catch(() => {});
+      while (!done) {
+        if (!latest) await new Promise<void>((resolve) => { wake = resolve; });
+        wake = null;
+        if (latest) { const update: ToolProgress = latest; latest = null; yield update; }
+      }
+      const output = await running;
       const summary = context.summarize ? safe(() => (context.summarize as (output: O) => string | undefined)(output)) : undefined;
       await step("committed", summary ? { summary } : {});
       yield output;

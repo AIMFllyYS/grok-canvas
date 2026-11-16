@@ -16,6 +16,8 @@ export function collectNodeNames(messages: ReadonlyArray<{ parts: ReadonlyArray<
         const name = typeof n.name === "string" ? n.name : typeof rec(n.data).name === "string" ? String(rec(n.data).name) : null;
         if (typeof n.id === "string" && name) names.set(n.id, name);
       }
+      // write_document 的结果是单个节点 { id, name }。
+      if (part.type === "tool-write_document" && typeof output.id === "string" && typeof output.name === "string") names.set(output.id, output.name);
     }
   return names;
 }
@@ -44,6 +46,10 @@ export function summarizeTool(name: string, input: unknown, output: unknown, nam
       if (list(i.disconnect).length) parts.push(`断开 ${list(i.disconnect).length} 条`);
       if (list(i.remove).length) parts.push(`删除 ${list(i.remove).length} 个`);
       return parts.join("，");
+    }
+    case "write_document": {
+      const title = typeof i.title === "string" ? i.title : "文稿";
+      return typeof o.chars === "number" ? `${title} · ${o.chars} 字` : title;
     }
     case "arrange_canvas_nodes":
       return typeof o.moved === "number" ? (o.moved ? `移动 ${o.moved} 个节点` : "已经整齐") : `${list(i.nodeIds).length} 个节点`;

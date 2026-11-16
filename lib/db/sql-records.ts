@@ -44,8 +44,10 @@ function toDoc(id: string, data: LoadedDoc): CanvasDoc {
   return {
     id, name: data.name, schemaVersion: 1, revision: data.revision, createdAt: data.createdAt, updatedAt: data.updatedAt,
     viewport: data.viewport ?? { x: 0, y: 0, zoom: 1 },
-    // SQL 里每个节点都有真实几何：导出时总是带尺寸。
-    nodes: data.snapshot.nodes.map(node => exportLegacyNode(node, { explicitSize: true, content: node.documentId ? content.get(node.documentId) ?? "" : null })),
+    // 只有文本节点的尺寸是用户/Agent 设定的；图片/视频/素材按内容比例自适应（不可缩放），
+    // 存储里的 280×240 只是占位几何。导出成显式尺寸会把节点外壳撑成 280×240：
+    // 16:9 的内容下方多出 80 单位空白，连线端点和提示词面板都会偏离画面。
+    nodes: data.snapshot.nodes.map(node => exportLegacyNode(node, { explicitSize: false, content: node.documentId ? content.get(node.documentId) ?? "" : null })),
     edges: data.snapshot.edges.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, type: "scissor", data: edge.role ? { role: edge.role } : {} })),
     libraryAssets: data.libraryAssets ?? [],
     ...(data.operationIds.length ? { appliedOperationIds: data.operationIds } : {}),

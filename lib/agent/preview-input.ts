@@ -6,6 +6,7 @@
  * - edit_canvas_nodes：要修改的节点叠「正在修改」标记，要删除的节点叠「待删除」标记，都不改正式文档。
  */
 import type { PreviewEntry } from "../canvas-runtime/preview-store";
+import { agentTextHeight } from "../canvas-runtime/text-size";
 
 export const PARTIAL_MERGE_MS = 100;
 export const PREVIEW_EXCERPT = 512;
@@ -30,7 +31,8 @@ export function addEntries(canvasId: string, toolCallId: string, input: unknown)
       label: typeof node.name === "string" && node.name.trim() ? node.name.slice(0, 160) : DEFAULT_NAME[type],
       x: explicit ? (node.x as number) : 0, y: explicit ? (node.y as number) : 0,
       width: typeof node.width === "number" ? Math.min(Math.max(node.width, 200), 560) : size.width,
-      height: typeof node.height === "number" ? Math.min(Math.max(node.height, 120), 1120) : size.height,
+      height: type === "canvasText" ? agentTextHeight(typeof node.height === "number" ? node.height : undefined, typeof node.content === "string" ? node.content : "", typeof node.width === "number" ? Math.min(Math.max(node.width, 200), 560) : size.width)
+        : typeof node.height === "number" ? Math.min(Math.max(node.height, 120), 1120) : size.height,
       status: "pending",
       explicit,
       ...(typeof node.ref === "string" ? { ref: node.ref } : {}),
@@ -53,6 +55,28 @@ export function editEntries(canvasId: string, toolCallId: string, input: unknown
     if (typeof id === "string" && id) out.push({ canvasId, toolCallId, itemIndex: index++, kind: "remove", label: "待删除", x: 0, y: 0, width: 0, height: 0, status: "pending", targetId: id });
   }
   return out;
+}
+
+/**
+ * write_document：参数到齐即画占位（新建）或叠「正在撰写」（重写）；执行中的 preliminary 草稿填进摘录。
+ * 摘录取正文末尾 512 字，画布上看到的是正在写的那一段；高度随正文增长（到上限后在节点内滚动）。
+ */
+export function writeEntries(canvasId: string, toolCallId: string, input: unknown, draft?: { content?: unknown }): PreviewEntry[] {
+  const value = (input ?? {}) as { title?: unknown; nodeId?: unknown; from?: unknown };
+  const title = typeof value.title === "string" && value.title.trim() ? value.title.slice(0, 160) : DEFAULT_NAME.canvasText;
+  const content = typeof draft?.content === "string" ? draft.content : "";
+  const excerpt = content.length > PREVIEW_EXCERPT ? `…${content.slice(-PREVIEW_EXCERPT)}` : content;
+  if (typeof value.nodeId === "string" && value.nodeId) {
+    return [{ canvasId, toolCallId, itemIndex: 0, kind: "edit", label: content ? `正在撰写 · ${content.length} 字` : "正在撰写…", x: 0, y: 0, width: 0, height: 0, status: "pending", targetId: value.nodeId }];
+  }
+  const width = DEFAULT_SIZE.canvasText.width;
+  return [{
+    canvasId, toolCallId, itemIndex: 0, kind: "add", nodeType: "canvasText",
+    label: content ? `${title} · 已写 ${content.length} 字` : title,
+    x: 0, y: 0, width, height: agentTextHeight(undefined, content, width), status: "pending", explicit: false,
+    ...(Array.isArray(value.from) ? { from: (value.from as unknown[]).filter((v): v is string => typeof v === "string").slice(0, 10) } : {}),
+    ...(excerpt ? { excerpt } : {}),
+  }];
 }
 
 /** 每个调用 100ms 合并一次；条目数变化（新条目出现）立即放行。 */

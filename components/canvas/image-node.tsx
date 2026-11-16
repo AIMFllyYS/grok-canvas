@@ -99,9 +99,9 @@ export const ImageNode = memo(function ImageNode({ id, data, selected, draggable
     setRatio(null);
   }, [data.assetName]);
 
-  // 无图：1:1 占位框；有图：按实际宽高比，横向固定宽、竖向固定高
+  // 无图或图还没解码（比例未知）：沿用占位框尺寸，不先闪一个 1:1 方框；有图且已知比例：横向固定宽、竖向固定高
   let boxStyle: CSSProperties;
-  if (!data.assetName) {
+  if (!data.assetName || ratio === null) {
     // 选了固定比例时占位框与生成结果同尺寸（与视频节点一致），布局不会在生成后错位；auto 仍是 240 方形。
     const [w, h] = String(data.aspectRatio ?? "").split(":").map(Number);
     const chosen = w && h && w > 0 && h > 0 ? w / h : null;
@@ -135,15 +135,19 @@ export const ImageNode = memo(function ImageNode({ id, data, selected, draggable
 
       <NodeSurface selected={selected} className="relative flex items-center justify-center" style={boxStyle}>
         {data.assetName ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <AssetImage
-            src={`/api/assets/${data.assetName}`}
-            alt={data.name}
-            className="h-full w-full object-contain"
-            onLoad={(event) =>
-              setRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight)
-            }
-          />
+          <>
+            {/* 图解码前保持「生成中」画面（刚生成完的图要等派生图），加载完一次性替换，不出现空白方框。 */}
+            {ratio === null && <div className="absolute inset-0"><ImagineLoading /></div>}
+            <AssetImage
+              src={`/api/assets/${data.assetName}`}
+              alt={data.name}
+              className={`h-full w-full object-contain ${ratio === null ? "opacity-0" : ""}`}
+              placeholder={null}
+              onLoad={(event) =>
+                setRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight)
+              }
+            />
+          </>
         ) : data.status === "failed" ? (
           <div className="nodrag nopan p-4">
             <StatusFeedback
@@ -158,7 +162,7 @@ export const ImageNode = memo(function ImageNode({ id, data, selected, draggable
         ) : (
           <ImageIcon className="h-8 w-8 text-muted-foreground/40" />
         )}
-        {running && <div role="status" className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-popover px-3 py-1 text-xs text-foreground">{runningCount > 1 ? `正在生成 ${runningCount} 张…` : "生成中…"}</div>}
+        {(running || (data.assetName && ratio === null)) && <div role="status" className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-popover px-3 py-1 text-xs text-foreground">{runningCount > 1 ? `正在生成 ${runningCount} 张…` : "生成中…"}</div>}
         {showPrimaryOverlay ? (
           <div className="pointer-events-none absolute inset-0 z-10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
             <span className="absolute left-1.5 top-1.5 rounded-full bg-popover px-2 py-0.5 text-[11px] leading-none shadow ring-1 ring-foreground/10">

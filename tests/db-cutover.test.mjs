@@ -223,6 +223,25 @@ test("claims / Agent / 视频任务 / 生成来源 / 画布生命周期都只写
   } finally { await rm(path.join(live, "maintenance.json"), { force: true }); }
 });
 
+test("SQLite 权威下 Agent 连线与出图回写可提交：新连线 ID 在补读重跑间不变；结果里的 undefined 字段不使命令失效", async () => {
+  const generation = await loadTypescript("lib/canvas-runtime/generation-commands.ts", { packages: true });
+  try {
+    const { agentEditNodes, agentGenerationWrite } = generation.module;
+    const limits = { maxTextWidth: 560, maxTextHeight: 1120 };
+    const linked = await agentEditNodes("c1", { updates: [], remove: [], connect: [{ source: "t1", target: "n1" }], disconnect: [] }, limits);
+    assert.equal(linked.changedEdgeIds.length, 1);
+    assert.deepEqual((await loadCanvas("c1")).edges.map(e => [e.source, e.target]), [["t1", "n1"]]);
+    const generationId = crypto.randomUUID();
+    await claimsModule.module.claimGeneration("c1", "n1", generationId);
+    await agentGenerationWrite("c1", "n1", generationId, { status: "running", generationId, errorMessage: null }, "start");
+    const results = [{ id: "r.png", status: "success", assetName: "r.png", error: undefined }];
+    const written = await agentGenerationWrite("c1", "n1", generationId, { status: "idle", assetName: "r.png", results, primaryResultId: "r.png" }, "result");
+    assert.equal(written.status, "applied");
+    const node = (await loadCanvas("c1")).nodes.find(n => n.id === "n1");
+    assert.deepEqual([node.data.status, node.data.assetName, node.data.results], ["idle", "r.png", [{ id: "r.png", status: "success", assetName: "r.png" }]]);
+  } finally { await generation.dispose(); }
+});
+
 test("恢复：标记损坏或数据库缺失时进入恢复（503），绝不回退读旧 JSON；切换后拒绝直接回到 JSON", async () => {
   const marker = await readFile(path.join(live, "storage-state.json"), "utf8");
   try {
