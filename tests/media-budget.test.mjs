@@ -105,6 +105,24 @@ test("缓存：按字节/像素阈值驱逐无订阅条目并调用 dispose；�
   warm.release(); b.release(); c.release();
 });
 
+for (const stage of ["waiting", "fetching"]) {
+  test(`节点在派生图${stage === "waiting" ? "等待重试" : "下载"}时卸载后立即重挂：新订阅拿到图，不会挂在已取消的任务上`, async () => {
+    const h = harness();
+    const first = h.media.acquire("d", "/d");
+    first.promise.catch(() => {});
+    await settle();
+    if (stage === "waiting") { h.respond("/d", { status: "pending", retryAfterMs: 1000 }); await settle(); }
+    first.release();
+    const again = h.media.acquire("d", "/d");
+    if (stage === "waiting") h.timers.shift()?.fn();
+    await settle();
+    h.respond("/d");
+    const handle = await Promise.race([again.promise, new Promise((_, reject) => setTimeout(() => reject(new Error("重挂后一直未就绪")), 200))]);
+    assert.ok(handle.url);
+    again.release();
+  });
+}
+
 test("派生图未就绪（202）按 Retry-After 延迟重试，超过次数报失败而不是无限循环；失败后可重新请求", async () => {
   const h = harness();
   const a = h.media.acquire("p", "/p");

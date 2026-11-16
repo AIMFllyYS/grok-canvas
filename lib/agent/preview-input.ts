@@ -57,6 +57,28 @@ export function editEntries(canvasId: string, toolCallId: string, input: unknown
   return out;
 }
 
+/**
+ * write_document：参数到齐即画占位（新建）或叠「正在撰写」（重写）；执行中的 preliminary 草稿填进摘录。
+ * 摘录取正文末尾 512 字，画布上看到的是正在写的那一段；高度随正文增长（到上限后在节点内滚动）。
+ */
+export function writeEntries(canvasId: string, toolCallId: string, input: unknown, draft?: { content?: unknown }): PreviewEntry[] {
+  const value = (input ?? {}) as { title?: unknown; nodeId?: unknown; from?: unknown };
+  const title = typeof value.title === "string" && value.title.trim() ? value.title.slice(0, 160) : DEFAULT_NAME.canvasText;
+  const content = typeof draft?.content === "string" ? draft.content : "";
+  const excerpt = content.length > PREVIEW_EXCERPT ? `…${content.slice(-PREVIEW_EXCERPT)}` : content;
+  if (typeof value.nodeId === "string" && value.nodeId) {
+    return [{ canvasId, toolCallId, itemIndex: 0, kind: "edit", label: content ? `正在撰写 · ${content.length} 字` : "正在撰写…", x: 0, y: 0, width: 0, height: 0, status: "pending", targetId: value.nodeId }];
+  }
+  const width = DEFAULT_SIZE.canvasText.width;
+  return [{
+    canvasId, toolCallId, itemIndex: 0, kind: "add", nodeType: "canvasText",
+    label: content ? `${title} · 已写 ${content.length} 字` : title,
+    x: 0, y: 0, width, height: agentTextHeight(undefined, content, width), status: "pending", explicit: false,
+    ...(Array.isArray(value.from) ? { from: (value.from as unknown[]).filter((v): v is string => typeof v === "string").slice(0, 10) } : {}),
+    ...(excerpt ? { excerpt } : {}),
+  }];
+}
+
 /** 每个调用 100ms 合并一次；条目数变化（新条目出现）立即放行。 */
 export function createPartialGate(ms = PARTIAL_MERGE_MS) {
   const last = new Map<string, { at: number; count: number }>();

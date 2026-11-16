@@ -4,7 +4,7 @@
  * 按画布隔离：切换画布后迟到的调用事件不会出现在另一画布。
  */
 import { RUNTIME_BUDGET } from "./runtime-budget";
-import { addEntries, createPartialGate, editEntries } from "../agent/preview-input";
+import { addEntries, createPartialGate, editEntries, writeEntries } from "../agent/preview-input";
 
 export type PreviewEntry = {
   canvasId: string;
@@ -118,6 +118,15 @@ export function bridgeToolPart(store: PreviewStore, canvasId: string, part: Tool
     scheduler.flushTerminals();
   };
   if (part.state === "output-error" || part.state === "output-denied") { terminal(() => store.remove(canvasId, toolCallId)); return; }
+  if (part.type === "tool-write_document" && (part.state === "input-available" || (part.state === "output-available" && (part as { preliminary?: boolean }).preliminary))) {
+    // 撰写中：每条 preliminary 带最新草稿（服务端已按 400ms/200 字合并），整条替换占位。
+    const draft = part.state === "output-available" ? (part.output as { draft?: { content?: unknown } } | undefined)?.draft : undefined;
+    for (const entry of writeEntries(canvasId, toolCallId, part.input, draft)) {
+      if (scheduler) scheduler.schedule({ key: `${canvasId}:${toolCallId}:${entry.itemIndex}`, priority: PREVIEW_PRIORITY, run: () => store.upsert(entry), bytes: bytesOf(entry) });
+      else store.upsert(entry);
+    }
+    return;
+  }
   if (part.state === "output-available") {
     if ((part as { preliminary?: boolean }).preliminary) return; // 执行阶段，不是最终结果
     const nodes = (part.output as { nodes?: Array<{ id?: unknown }> } | undefined)?.nodes;
@@ -125,7 +134,8 @@ export function bridgeToolPart(store: PreviewStore, canvasId: string, part: Tool
       const current = store.get(canvasId).filter(entry => entry.toolCallId === toolCallId);
       if (!current.length) return;
       for (const entry of current) {
-        const nodeId = entry.kind === "add" && Array.isArray(nodes) ? nodes[entry.itemIndex]?.id : undefined;
+        const single = (part.output as { id?: unknown } | undefined)?.id;
+        const nodeId = entry.kind !== "add" ? undefined : Array.isArray(nodes) ? nodes[entry.itemIndex]?.id : entry.itemIndex === 0 ? single : undefined;
         if (typeof nodeId === "string") store.upsert({ ...entry, nodeId });
         else store.remove(canvasId, toolCallId, entry.itemIndex);
       }

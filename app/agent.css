@@ -777,6 +777,27 @@ html[data-toolbar-layout="scattered"] .agent-launcher {
   color: var(--muted-foreground);
   opacity: 0.6;
 }
+/* write_document 撰写中的正文：卡片内限高滚动，跟随末尾。 */
+.agent-tool-draft {
+  max-height: 160px;
+  overflow-y: auto;
+  margin: 0 9px 9px 29px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--muted);
+  overscroll-behavior: contain;
+}
+.agent-tool-draft-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-tool-draft-empty {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
 .agent-tool-error {
   padding: 0 9px 8px 29px;
   font-size: 11px;

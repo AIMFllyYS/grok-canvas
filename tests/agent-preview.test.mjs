@@ -95,3 +95,25 @@ test("位置估算：没有坐标的新增按流程排在上游右侧，不再�
   assert.ok(byName["镜头"].x > byName["脚本"].x, "下游在更右侧");
   assert.deepEqual([byName["定点"].x, byName["定点"].y], [999, 888]);
 });
+
+test("write_document 预显示：参数到齐画占位；草稿填进摘录（取末尾）且高度随正文增长；完成后交接正式节点；重写叠「正在撰写」", () => {
+  const store = createPreviewStore();
+  const w = (state, extra = {}) => ({ type: "tool-write_document", toolCallId: "w1", state, input: { title: "导演阐述", brief: "b", from: ["up"] }, ...extra });
+  bridgeToolPart(store, "c", w("input-available"));
+  let [entry] = store.get("c");
+  assert.deepEqual([entry.kind, entry.nodeType, entry.label, entry.excerpt, entry.from], ["add", "canvasText", "导演阐述", undefined, ["up"]]);
+  const short = entry.height;
+  const long = "开头" + "字".repeat(3000) + "最新一句";
+  bridgeToolPart(store, "c", w("output-available", { preliminary: true, output: { phase: "executing", draft: { content: long } } }));
+  [entry] = store.get("c");
+  assert.match(entry.label, /已写 3006 字/);
+  assert.ok(entry.excerpt.endsWith("最新一句") && entry.excerpt.length <= 513, "摘录是正文末尾");
+  assert.ok(entry.height > short, "占位随正文变高");
+  bridgeToolPart(store, "c", w("output-available", { output: { id: "doc-1", name: "导演阐述", chars: 3006 } }));
+  assert.equal(store.get("c")[0].nodeId, "doc-1", "完成后等正式节点出现再移除");
+  const edit = createPreviewStore();
+  bridgeToolPart(edit, "c", { type: "tool-write_document", toolCallId: "w2", state: "output-available", preliminary: true, input: { title: "剧本", brief: "b", nodeId: "t1" }, output: { phase: "executing", draft: { content: "已写的" } } });
+  assert.deepEqual(edit.get("c").map(e => [e.kind, e.targetId, e.label]), [["edit", "t1", "正在撰写 · 3 字"]]);
+  bridgeToolPart(edit, "c", { type: "tool-write_document", toolCallId: "w2", state: "output-error", input: {}, errorText: "x" });
+  assert.equal(edit.get("c").length, 0, "失败立即移除");
+});

@@ -296,6 +296,10 @@ html:root :is(input, textarea, [contenteditable="true"]) { caret-color: var(--ui
 .canvas-hand .react-flow__pane, .canvas-hand .react-flow__node { cursor: grab; }
 .canvas-hand .react-flow__pane:active, .canvas-hand .react-flow__node.dragging { cursor: grabbing; }
 .ui-library-drawer { animation: library-enter 140ms ease-out; }
+/* Agent 新建的节点接替占位时：从略小处弹到实际大小（React Flow 的定位写在 transform 上，动画放在子元素）。 */
+.canvas-node-arrive > * { animation: node-arrive 420ms cubic-bezier(0.34, 1.56, 0.64, 1); transform-origin: top left; }
+@keyframes node-arrive { from { opacity: 0.4; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .canvas-node-arrive > * { animation: none; } }
 /* 素材库可选区域：保留滚动，但不显示滚动条导航栏。 */
 .ui-scroll-hidden { scrollbar-width: none; -ms-overflow-style: none; }
 .ui-scroll-hidden::-webkit-scrollbar { width: 0; height: 0; display: none; }

@@ -43,7 +43,7 @@ import type { HistoryEntry } from "@/lib/canvas-runtime/history";
 import type { CanvasCommand, Geometry } from "@/lib/canvas-runtime/types";
 import { CanvasScene } from "./canvas-scene";
 import { canvasMetrics, measurePointerToPaint } from "@/lib/canvas-runtime/metrics";
-import { CanvasPreview } from "./canvas-preview";
+import { CanvasPreview, useHasPreviews } from "./canvas-preview";
 import { type CanvasOperation } from "@/lib/canvas-operations";
 import { generationClaim } from "@/lib/generation-claim-client";
 import { canvasDraftKey, clearCanvasDraft, loadCanvasDraft, loadGeometryCheckpoints, saveGeometryCheckpoint } from "@/lib/canvas-drafts";
@@ -430,6 +430,8 @@ export function FlowCanvas({
     setPanelNodeId(selectedNodes.length === 1 ? (selectedNodes[0]?.id ?? null) : null);
   }, [closeCandidates]);
   const [minimapOpen, setMinimapOpen] = useState(false);
+  // Agent 正在创建节点时，空画布提示会叠在占位上，先隐藏。
+  const hasPreviews = useHasPreviews(doc.id);
   const { screenToFlowPosition, updateNodeData, zoomIn, zoomOut, zoomTo, setViewport } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -2276,7 +2278,7 @@ export function FlowCanvas({
           <CandidatePanel />
         </CanvasScene>
 
-        {nodes.length === 0 ? (
+        {nodes.length === 0 && !hasPreviews ? (
           <CanvasEmptyState
             onAddImage={() => {
               pushAdd([addImageNode(viewportCenter())], []);
